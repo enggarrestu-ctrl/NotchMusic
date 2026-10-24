@@ -1264,6 +1264,8 @@ public partial class MainWindow : Window
         ("Grafit", ["#1C1C1E", "#3A3A3C", "#A1A1A6", "#E5E5EA", "#111113"]),
         ("Anggur", ["#4A2433", "#6E3A4D", "#C98AA0", "#F2C4CE", "#22101A"]),
         ("Biru Es", ["#112D4E", "#3F72AF", "#DBE2EF", "#F9F7F7", "#112D4E"]),
+        // Hitam legam: latar #000 menyatu dengan bezel layar; aksen mint senada logo.
+        ("Hitam Legam", ["#000000", "#2C2C2E", "#F2F2F7", "#7DE2B4", "#000000"]),
     ];
 
     // Tema kustom (bila sudah disimpan) menjadi urutan terakhir setelah tema bawaan.
