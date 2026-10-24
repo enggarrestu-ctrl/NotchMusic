@@ -69,4 +69,13 @@ public class CoreTests
         Assert.Equal("teks 10", buffer.Items[0].Text);
         Assert.Single(buffer.Items, x => x.Text == "teks 10");
     }
+
+    [Fact]
+    public void SpeedFormatSwitchesToMegabytes()
+    {
+        Assert.Equal("0 KB/s", MainWindow.FormatSpeed(100));
+        Assert.Equal("512 KB/s", MainWindow.FormatSpeed(512 * 1024));
+        Assert.Equal("1.5 MB/s", MainWindow.FormatSpeed(1.5 * 1024 * 1024));
+        Assert.Equal("250 MB/s", MainWindow.FormatSpeed(250.0 * 1024 * 1024));
+    }
 }

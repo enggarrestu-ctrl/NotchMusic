@@ -364,6 +364,12 @@
                           Data="{StaticResource NotchLogoGeometry}" IsHitTestVisible="False" AutomationProperties.Name="Logo NotchMusic" />
                     <TextBlock x:Name="CompactClock" Text="00:00" FontSize="15" FontWeight="SemiBold"
                                VerticalAlignment="Center" AutomationProperties.Name="Jam saat ini" />
+                    <!-- Kecepatan internet saat ini; lebar tetap agar notch tidak berubah ukuran tiap detik. -->
+                    <StackPanel Width="58" Margin="8,0,0,0" VerticalAlignment="Center" Opacity="0.85"
+                                AutomationProperties.Name="Kecepatan internet">
+                        <TextBlock x:Name="SpeedDown" Text="↓ 0 KB/s" FontSize="9" FontWeight="SemiBold" LineHeight="10" LineStackingStrategy="BlockLineHeight" />
+                        <TextBlock x:Name="SpeedUp" Text="↑ 0 KB/s" FontSize="9" LineHeight="10" LineStackingStrategy="BlockLineHeight" />
+                    </StackPanel>
                 </StackPanel>
                 <!-- Notifikasi WhatsApp/browser baru, tampil sebentar menggantikan jam/lirik. -->
                 <TextBlock x:Name="CompactNotice" Visibility="Collapsed" FontSize="14" FontWeight="SemiBold"

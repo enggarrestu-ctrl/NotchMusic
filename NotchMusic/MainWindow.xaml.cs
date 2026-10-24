@@ -31,7 +31,7 @@ namespace NotchMusic;
 public partial class MainWindow : Window
 {
     // Ukuran dalam satuan WPF: otomatis mengikuti skala layar Windows.
-    private const double SmallWidth = 128; // Logo 14 + jarak 6 + jam.
+    private const double SmallWidth = 194; // Logo 14 + jarak 6 + jam + kecepatan internet 66.
     private const double SmallHeight = 34;
     private const double MusicMinWidth = 240;
     private const double MusicHeight = 42;
@@ -206,6 +206,7 @@ public partial class MainWindow : Window
         };
         _progressTimer.Tick += ProgressTimer_Tick;
         _clockTimer.Tick += ClockTimer_Tick;
+        _speedTimer.Tick += (_, _) => SampleSpeed();
         _lyricTimer.Tick += LyricTimer_Tick;
         SystemParameters.StaticPropertyChanged += SystemParameters_Changed;
         UpdateClock();
@@ -583,6 +584,7 @@ public partial class MainWindow : Window
         CompactNotice.Visibility = notice ? Visibility.Visible : Visibility.Collapsed;
         CompactIdle.Visibility = music || notice ? Visibility.Collapsed : Visibility.Visible;
         CompactMusic.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSpeedTimer();
         SetEqualizerAnimation(music && !_expanded && !_minimizedToTray && SystemParameters.ClientAreaAnimation);
         RefreshNotchSize();
     }
@@ -1342,7 +1344,7 @@ public partial class MainWindow : Window
         _clipboardSearchTimer.Stop(); CompletePageTransition();
         _coverRefreshTimer.Stop();
         _metadataRetryTimer.Stop(); _skipFromTrackKey = null;
-        _collapseTimer.Stop(); _clockTimer.Stop(); _progressTimer.Stop(); _lyricTimer.Stop();
+        _collapseTimer.Stop(); _clockTimer.Stop(); _progressTimer.Stop(); _lyricTimer.Stop(); _speedTimer.Stop();
         SetEqualizerAnimation(false); StopLyricScroll();
         _lyricsVersion++;
         if (_lyricsCts is not null) { _reloadLyricsAfterHide = true; _lyricsCts.Cancel(); }
@@ -2352,7 +2354,7 @@ public partial class MainWindow : Window
         _collapseTimer.Tick -= CollapseTimer_Tick;
         _progressTimer.Stop();
         _progressTimer.Tick -= ProgressTimer_Tick;
-        _clockTimer.Stop();
+        _clockTimer.Stop(); _speedTimer.Stop();
         _clockTimer.Tick -= ClockTimer_Tick;
         _lyricTimer.Stop(); _lyricTimer.Tick -= LyricTimer_Tick;
         _lyricsVersion++; _lyricsCts?.Cancel();
