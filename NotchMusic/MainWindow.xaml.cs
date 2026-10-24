@@ -31,7 +31,7 @@ namespace NotchMusic;
 public partial class MainWindow : Window
 {
     // Ukuran dalam satuan WPF: otomatis mengikuti skala layar Windows.
-    private const double SmallWidth = 220; // Jam di tengah, kiri-kanan masing-masing 58 (logo / kecepatan internet).
+    private const double SmallWidth = 240; // Jam di tengah, kiri-kanan masing-masing 68 (logo / kecepatan internet).
     private const double SmallHeight = 34;
     private const double MusicMinWidth = 240;
     private const double MusicHeight = 42;

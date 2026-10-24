@@ -367,10 +367,11 @@
                     <TextBlock x:Name="CompactClock" Grid.Column="1" Text="00:00" FontSize="15" FontWeight="SemiBold"
                                VerticalAlignment="Center" AutomationProperties.Name="Jam saat ini" />
                     <!-- Kecepatan internet saat ini; lebar tetap agar notch tidak berubah ukuran tiap detik. -->
-                    <StackPanel Grid.Column="2" Width="50" Margin="8,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" Opacity="0.85"
-                                AutomationProperties.Name="Kecepatan internet">
-                        <TextBlock x:Name="SpeedDown" Text="↓ 0 KB/s" FontSize="9" FontWeight="SemiBold" LineHeight="10" LineStackingStrategy="BlockLineHeight" />
-                        <TextBlock x:Name="SpeedUp" Text="↑ 0 KB/s" FontSize="9" LineHeight="10" LineStackingStrategy="BlockLineHeight" />
+                    <!-- Teks kecil: mode Display agar huruf tajam di jendela transparan. -->
+                    <StackPanel Grid.Column="2" Width="60" Margin="8,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                TextOptions.TextFormattingMode="Display" AutomationProperties.Name="Kecepatan internet">
+                        <TextBlock x:Name="SpeedDown" Text="↓ 0 KB/s" FontSize="10.5" FontWeight="SemiBold" LineHeight="12" LineStackingStrategy="BlockLineHeight" />
+                        <TextBlock x:Name="SpeedUp" Text="↑ 0 KB/s" FontSize="10.5" FontWeight="SemiBold" LineHeight="12" LineStackingStrategy="BlockLineHeight" />
                     </StackPanel>
                 </Grid>
                 <!-- Notifikasi WhatsApp/browser baru, tampil sebentar menggantikan jam/lirik. -->
