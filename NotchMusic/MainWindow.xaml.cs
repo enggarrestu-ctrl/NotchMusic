@@ -258,7 +258,7 @@ public partial class MainWindow : Window
         {
             Debug.WriteLine(ex);
             SongTitle.Text = "Belum bisa membaca media";
-            ArtistName.Text = "Klik tombol sumber lalu Baca ulang media";
+            ArtistName.Text = "Klik kanan notch lalu Baca ulang media";
         }
         finally { _initializing = false; }
     }
@@ -1538,12 +1538,6 @@ public partial class MainWindow : Window
             _repositioning ? (LightAnimations ? 140 : 180) : _hoverMilliseconds, AnimationFrames);
     }
 
-    private void SourceButton_Click(object sender, RoutedEventArgs e)
-    {
-        NotchMenu.PlacementTarget = SourceButton;
-        NotchMenu.Placement = PlacementMode.Bottom;
-        NotchMenu.IsOpen = true;
-    }
 
     private void ControlsMenu_Opened(object sender, RoutedEventArgs e) => _collapseTimer.Stop();
 

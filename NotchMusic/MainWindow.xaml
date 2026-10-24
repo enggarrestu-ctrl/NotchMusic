@@ -471,18 +471,6 @@
                                    FontSize="11" Foreground="White" Margin="0,2,0,0"
                                    TextTrimming="CharacterEllipsis" />
                     </StackPanel>
-                    <Button x:Name="SourceButton" Grid.Column="2" Style="{StaticResource MusicButton}"
-                            Width="24" Height="24" Margin="0" HorizontalAlignment="Right"
-                            ToolTip="Pilih sumber musik"
-                            AutomationProperties.Name="Pilih sumber musik" Click="SourceButton_Click">
-                        <Viewbox Width="16" Height="16" Stretch="Uniform" IsHitTestVisible="False">
-                            <Canvas Width="20" Height="20">
-                                <Path Data="M3,3.5 H17 V13 H3 Z M10,13 V16.5 M6.5,16.5 H13.5"
-                                      Stroke="{DynamicResource NotchInk}" StrokeThickness="1.6"
-                                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
                 </Grid>
 
                 <!-- Waktu dan slider satu baris; kontrol tetap berada di bawah progres. -->
