@@ -195,7 +195,7 @@ public partial class MainWindow
         StopLyricScroll();
         if (_expandedPage == 1 && _clipboardResultsDirty) RefreshClipboardResults();
         if (_expandedPage == 0) { RenderLyrics(); RenderProgress(); }
-        if (_expandedPage == GamePageIndex) RefreshGames();
+        if (_expandedPage == GamePageIndex && GameList.ItemsSource is null) RefreshGames(); // Sekali; berikutnya hanya saat daftar diubah.
         UpdateProgressTimer(); UpdateLyricTimer();
         if (ClipboardSearchBox.IsKeyboardFocusWithin) Keyboard.ClearFocus();
         if (!SystemParameters.ClientAreaAnimation || !_expanded)

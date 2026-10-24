@@ -29,6 +29,9 @@ public partial class MainWindow
             games = await Task.Run(() =>
             {
                 var steamNames = keys.Any(SteamLibrary.IsAppId) ? SteamLibrary.RecentGames(int.MaxValue).ToDictionary(x => x.Key, x => x.Name) : [];
+                // Game Steam yang sudah di-uninstall (manifest hilang) tidak ditampilkan. Bila Steam sama sekali
+                // tidak terbaca, semua tetap tampil agar daftar tidak terhapus saat urutan disimpan.
+                if (steamNames.Count > 0) keys = keys.Where(key => !SteamLibrary.IsAppId(key) || steamNames.ContainsKey(key)).ToList();
                 return GameLibrary.WithIcons(keys.Select(key => SteamLibrary.IsAppId(key)
                     ? new GameEntry(key, steamNames.GetValueOrDefault(key, "Steam " + key), null, GameKind.Steam)
                     : GameLibrary.Custom(key)).ToList());
@@ -36,6 +39,8 @@ public partial class MainWindow
         }
         catch (Exception ex) { Debug.WriteLine(ex); games = []; }
         if (_closed || version != _gameLoadVersion) return;
+        // Game yang di-uninstall ikut keluar dari daftar tersimpan, supaya slotnya bisa dipakai lagi.
+        if (games.Count > 0 && keys.Count < _preferences.GameOrder.Count) { _preferences.GameOrder = keys; SavePreferences(); }
         games.Add(GameEntry.AddButton);
         GameList.ItemsSource = games;
     }
