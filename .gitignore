@@ -1,0 +1,5 @@
+﻿bin/
+obj/
+.vs/
+*.user
+Backup_before_v4.7.5/

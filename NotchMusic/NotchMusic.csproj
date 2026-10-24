@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <Version>5.4.5</Version>
+    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/NotchMusic.ico</ApplicationIcon>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <!-- Heap kecil: GC latar belakang tidak perlu, hemat satu thread dan ~1 MB. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <RetainVMGarbageCollection>false</RetainVMGarbageCollection>
+    <!-- Teks aplikasi berbahasa Indonesia; folder terjemahan WPF/.NET (cs, de, ja, ...) tidak dipakai. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+  </PropertyGroup>
+  <!-- Dorong heap lebih kecil; ini bukan batas RAM seluruh proses. -->
+  <ItemGroup>
+    <!-- Ikon tray dibaca Win32 dari file di samping exe. -->
+    <None Include="Assets/NotchMusic_Tray_Mint.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="3" />
+  </ItemGroup>
+</Project>
