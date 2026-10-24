@@ -359,18 +359,20 @@
         <Grid>
             <!-- Lirik hanya saat tersedia dan Playing; selain itu jam saja. -->
             <Grid x:Name="CompactPanel" Width="48" Height="24" Margin="0,-4,0,0" HorizontalAlignment="Center" VerticalAlignment="Top">
-                <StackPanel x:Name="CompactIdle" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <Path Width="14" Height="14" Margin="0,0,6,0" Stretch="Uniform" Fill="#7DE2B4" VerticalAlignment="Center"
+                <!-- Jam tepat di tengah; logo di kirinya, kecepatan internet di kanannya (kolom kiri-kanan sama lebar). -->
+                <Grid x:Name="CompactIdle" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Path Width="14" Height="14" Margin="0,0,8,0" HorizontalAlignment="Right" Stretch="Uniform" Fill="#7DE2B4" VerticalAlignment="Center"
                           Data="{StaticResource NotchLogoGeometry}" IsHitTestVisible="False" AutomationProperties.Name="Logo NotchMusic" />
-                    <TextBlock x:Name="CompactClock" Text="00:00" FontSize="15" FontWeight="SemiBold"
+                    <TextBlock x:Name="CompactClock" Grid.Column="1" Text="00:00" FontSize="15" FontWeight="SemiBold"
                                VerticalAlignment="Center" AutomationProperties.Name="Jam saat ini" />
                     <!-- Kecepatan internet saat ini; lebar tetap agar notch tidak berubah ukuran tiap detik. -->
-                    <StackPanel Width="58" Margin="8,0,0,0" VerticalAlignment="Center" Opacity="0.85"
+                    <StackPanel Grid.Column="2" Width="50" Margin="8,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" Opacity="0.85"
                                 AutomationProperties.Name="Kecepatan internet">
                         <TextBlock x:Name="SpeedDown" Text="↓ 0 KB/s" FontSize="9" FontWeight="SemiBold" LineHeight="10" LineStackingStrategy="BlockLineHeight" />
                         <TextBlock x:Name="SpeedUp" Text="↑ 0 KB/s" FontSize="9" LineHeight="10" LineStackingStrategy="BlockLineHeight" />
                     </StackPanel>
-                </StackPanel>
+                </Grid>
                 <!-- Notifikasi WhatsApp/browser baru, tampil sebentar menggantikan jam/lirik. -->
                 <TextBlock x:Name="CompactNotice" Visibility="Collapsed" FontSize="14" FontWeight="SemiBold"
                            HorizontalAlignment="Center" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
