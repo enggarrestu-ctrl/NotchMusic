@@ -75,3 +75,7 @@ dotnet publish NotchMusic/NotchMusic.csproj -p:PublishProfile=FolderProfile
 | `NotchMusic/GameFeature.cs` | Peluncur game dan pembaca data Steam |
 | `NotchMusic/NetSpeedFeature.cs` | Kecepatan internet |
 | `NotchMusic.Tests/` | Tes xUnit |
+
+## Lisensi
+
+[MIT](LICENSE) © 2026 enggarrestu-ctrl
