@@ -23,10 +23,17 @@ public partial class MainWindow
         _speedTimer.Start();
     }
 
-    private void SampleSpeed()
+    private bool _speedBusy;
+
+    // Membaca adapter jaringan butuh ~15 ms: dikerjakan di thread latar agar animasi notch tidak tersendat.
+    private async void SampleSpeed()
     {
-        if (!NetworkTotals(out var down, out var up)) return;
-        var now = Stopwatch.GetTimestamp();
+        if (_speedBusy) return;
+        _speedBusy = true;
+        (long Down, long Up, long Now)? sample;
+        try { sample = await Task.Run(() => NetworkTotals(out var d, out var u) ? (d, u, Stopwatch.GetTimestamp()) : ((long, long, long)?)null); }
+        finally { _speedBusy = false; }
+        if (sample is not var (down, up, now) || _closed) return;
         if (_speedStamp > 0)
         {
             var seconds = Stopwatch.GetElapsedTime(_speedStamp, now).TotalSeconds;

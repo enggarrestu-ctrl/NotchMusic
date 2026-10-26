@@ -78,4 +78,15 @@ public class CoreTests
         Assert.Equal("1.5 MB/s", MainWindow.FormatSpeed(1.5 * 1024 * 1024));
         Assert.Equal("250 MB/s", MainWindow.FormatSpeed(250.0 * 1024 * 1024));
     }
+
+    [Fact]
+    public void AnimationFpsDividesRefreshRate()
+    {
+        Assert.Equal(100, DesktopNative.PacedFrames(200));
+        Assert.Equal(90, DesktopNative.PacedFrames(180));
+        Assert.Equal(72, DesktopNative.PacedFrames(144));
+        Assert.Equal(120, DesktopNative.PacedFrames(240));
+        Assert.Equal(60, DesktopNative.PacedFrames(60));
+        Assert.Equal(120, DesktopNative.PacedFrames(120));
+    }
 }

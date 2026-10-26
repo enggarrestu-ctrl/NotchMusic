@@ -99,9 +99,8 @@ public partial class MainWindow : Window
     private string? _coverFingerprint;
     private int _coverPixels;
     private bool LightAnimations => _preferences.LightAnimations || (RenderCapability.Tier >> 16) < 2;
-    // Ikuti refresh monitor, maks 120: lebih halus dari 60 tanpa membebani GPU/CPU seperti 200 Hz.
-    private static readonly int DisplayFrames = Math.Clamp(DesktopNative.PrimaryRefreshRate(), 60, 120);
-    private int AnimationFrames => LightAnimations ? 30 : DisplayFrames;
+    // Ikuti refresh monitor tempat notch berada, maks 120 (lihat PacedFrames); dibaca saat animasi dimulai.
+    private int AnimationFrames => LightAnimations ? 30 : DesktopNative.PacedFrames(DesktopNative.RefreshRate(_windowHandle));
     private int _lyricIndex = int.MinValue;
     private LyricsMode _lyricsMode;
     private double _lyricsOffsetSeconds;
@@ -2910,8 +2909,12 @@ internal static class DesktopNative
     }
     [StructLayout(LayoutKind.Sequential)]
     private struct NativePoint { public int X, Y; }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MonitorInfo { public uint Size; public NativeRect Monitor, Work; public uint Flags; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct MonitorInfo // MONITORINFOEXW: Device dipakai untuk membaca refresh rate monitor itu.
+    {
+        public uint Size; public NativeRect Monitor, Work; public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Device;
+    }
 
     internal static NativeRect ScreenArea(IntPtr window, bool custom, double centerX, double top)
     {
@@ -2958,12 +2961,20 @@ internal static class DesktopNative
             && window.Right >= info.Monitor.Right && window.Bottom >= info.Monitor.Bottom;
     }
 
-    // shortcut: membaca refresh layar utama saja, cukup selama notch ada di layar utama; pindah ke
-    // EnumDisplaySettings per-monitor bila notch sering di monitor lain dengan refresh berbeda.
-    internal static int PrimaryRefreshRate()
+    internal static int RefreshRate(IntPtr window)
     {
+        var info = new MonitorInfo { Size = (uint)Marshal.SizeOf<MonitorInfo>() };
+        var device = window != IntPtr.Zero && GetMonitorInfo(MonitorFromWindow(window, 2), ref info) ? info.Device : null;
         var mode = new DevMode { Size = (ushort)Marshal.SizeOf<DevMode>() };
-        return EnumDisplaySettings(null, -1, ref mode) && mode.DisplayFrequency > 1 ? (int)mode.DisplayFrequency : 60; // ENUM_CURRENT_SETTINGS
+        return EnumDisplaySettings(device, -1, ref mode) && mode.DisplayFrequency > 1 ? (int)mode.DisplayFrequency : 60; // ENUM_CURRENT_SETTINGS
+    }
+
+    // Maks 120 fps, tapi selalu pembagi refresh monitor (200 Hz -> 100, 180 -> 90, 144 -> 72):
+    // tiap frame tampil jumlah vsync yang sama, jadi gerakan tidak tersendat-sendat.
+    internal static int PacedFrames(int refreshRate)
+    {
+        var hz = Math.Max(30, refreshRate);
+        return (int)Math.Round(hz / Math.Ceiling(hz / 120.0));
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
