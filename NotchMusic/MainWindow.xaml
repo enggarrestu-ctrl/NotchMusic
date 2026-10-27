@@ -51,7 +51,7 @@
         <Geometry x:Key="PreviousIconGeometry">M3,3 H5 V17 H3 Z M17,3 V17 L7,10 Z</Geometry>
         <Geometry x:Key="NextIconGeometry">M15,3 H17 V17 H15 Z M3,3 L13,10 L3,17 Z</Geometry>
 
-        <!-- Tombol teks kecil (Jeda, Reset, Scan Steam): pil tanpa garis tepi, warna tema. -->
+        <!-- Tombol teks kecil (Jeda, Reset, Scan): pil tanpa garis tepi, warna tema. -->
         <Style x:Key="ChipButton" TargetType="Button">
             <Setter Property="Height" Value="20" />
             <Setter Property="Padding" Value="10,0" />
@@ -723,7 +723,7 @@
                     <Grid.RowDefinitions><RowDefinition Height="22" /><RowDefinition Height="*" /><RowDefinition Height="16" /></Grid.RowDefinitions>
                     <Grid>
                         <TextBlock Text="Game" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <Button Style="{StaticResource ChipButton}" HorizontalAlignment="Right" Content="Scan Steam" ToolTip="Tambahkan game Steam yang terakhir dimainkan" Click="SteamScan_Click" />
+                        <Button Style="{StaticResource ChipButton}" HorizontalAlignment="Right" Content="Scan" ToolTip="Tambahkan game Steam yang terakhir dimainkan" Click="SteamScan_Click" />
                     </Grid>
                     <ItemsControl x:Name="GameList" Grid.Row="1" Margin="0,2,0,0" AutomationProperties.Name="Daftar game">
                         <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="8" Rows="1" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>

@@ -12,7 +12,7 @@ using System.Windows.Media.Imaging;
 namespace NotchMusic;
 
 // Halaman ketiga: daftar game pilihan sendiri (GameOrder), lalu kotak "+". Klik = buka.
-// Game Steam masuk hanya lewat tombol "Scan Steam"; semua game bisa dihapus dan dipindah.
+// Game Steam masuk hanya lewat tombol "Scan"; semua game bisa dihapus dan dipindah.
 public partial class MainWindow
 {
     private const int GamePageIndex = 2;
