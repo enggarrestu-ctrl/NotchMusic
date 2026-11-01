@@ -23,10 +23,11 @@ public partial class MainWindow
 
     private void InitializeClipboardPages()
     {
-        _expandedPage = Math.Clamp(_preferences.ExpandedPage, 0, PageCount - 1);
+        _expandedPage = EnabledPages.Contains(_preferences.ExpandedPage) ? _preferences.ExpandedPage : 0;
         _clipboardSearchTimer.Tick += (_, _) =>
         { _clipboardSearchTimer.Stop(); RefreshClipboardResults(); };
         CompletePageTransition();
+        PreviousPageButton.Visibility = NextPageButton.Visibility = EnabledPages.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         RefreshClipboardResults();
         UpdateClipboardHeader();
     }
@@ -41,7 +42,7 @@ public partial class MainWindow
 
     private void QueueClipboardRead()
     {
-        if (_closed || !_preferences.ClipboardRecordingEnabled) return;
+        if (_closed || !_preferences.ClipboardRecordingEnabled || !_preferences.ClipboardEnabled) return;
         _clipboardReadPending = true;
         if (_clipboardReadBusy) return;
         _clipboardReadBusy = true;
@@ -180,22 +181,38 @@ public partial class MainWindow
     private void PreviousPage_Click(object sender, RoutedEventArgs e) => NavigatePage(-1);
     private void NextPage_Click(object sender, RoutedEventArgs e) => NavigatePage(1);
 
-    // Urutan halaman notch terbuka: musik, clipboard, game.
-    private const int PageCount = 3;
-    private Grid PageAt(int index) => index switch { 0 => MusicPage, 1 => ClipboardPage, _ => GamePage };
-    private TranslateTransform ShiftAt(int index) => index switch { 0 => MusicPageShift, 1 => ClipboardPageShift, _ => GamePageShift };
+    // Urutan halaman notch terbuka: musik, clipboard, game, jadwal salat. Halaman yang dimatikan dilewati.
+    private const int PageCount = 4;
+    private Grid PageAt(int index) => index switch { 0 => MusicPage, 1 => ClipboardPage, 2 => GamePage, _ => PrayerPage };
+    private TranslateTransform ShiftAt(int index) => index switch { 0 => MusicPageShift, 1 => ClipboardPageShift, 2 => GamePageShift, _ => PrayerPageShift };
+    private List<int> EnabledPages => new[] { 0, 1, GamePageIndex, PrayerPageIndex }.Where(i => i switch
+    {
+        1 => _preferences.ClipboardEnabled, GamePageIndex => _preferences.GamesEnabled,
+        PrayerPageIndex => _preferences.PrayerEnabled, _ => true
+    }).ToList();
+
+    // Setelah fitur dinyalakan/dimatikan: pindah ke Musik bila halaman aktif hilang, sembunyikan panah bila tinggal satu halaman.
+    private void ApplyPageToggles()
+    {
+        if (!EnabledPages.Contains(_expandedPage)) { _expandedPage = 0; _preferences.ExpandedPage = 0; }
+        CompletePageTransition();
+        PreviousPageButton.Visibility = NextPageButton.Visibility = EnabledPages.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (_expandedPage == 0) { RenderLyrics(); RenderProgress(); }
+        UpdateProgressTimer(); UpdateLyricTimer();
+    }
 
     private void NavigatePage(int direction)
     {
         if (_closed || _minimizedToTray || _repositioning || _seekDragging) return;
         if (_pageAnimationBusy) { _queuedPageDirection = Math.Sign(direction); return; }
         var previous = _expandedPage;
-        _expandedPage = NotchPages.Next(previous, direction, PageCount);
+        _expandedPage = NotchPages.Next(EnabledPages, previous, direction);
         _preferences.ExpandedPage = _expandedPage; SavePreferences();
         StopLyricScroll();
         if (_expandedPage == 1 && _clipboardResultsDirty) RefreshClipboardResults();
         if (_expandedPage == 0) { RenderLyrics(); RenderProgress(); }
         if (_expandedPage == GamePageIndex && GameList.ItemsSource is null) RefreshGames(); // Sekali; berikutnya hanya saat daftar diubah.
+        if (_expandedPage == PrayerPageIndex) RenderPrayer();
         UpdateProgressTimer(); UpdateLyricTimer();
         if (ClipboardSearchBox.IsKeyboardFocusWithin) Keyboard.ClearFocus();
         if (!SystemParameters.ClientAreaAnimation || !_expanded)
@@ -259,10 +276,13 @@ public partial class MainWindow
 
 internal static class NotchPages
 {
-    internal static int Next(int current, int direction, int count)
+    // Halaman berikutnya/sebelumnya di antara halaman yang aktif, berputar di ujung.
+    internal static int Next(List<int> pages, int current, int direction)
     {
-        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count));
-        return ((current % count + Math.Sign(direction)) % count + count) % count;
+        if (pages.Count == 0) throw new ArgumentException("Minimal satu halaman.", nameof(pages));
+        var index = pages.IndexOf(current);
+        if (index < 0) return pages[0];
+        return pages[((index + Math.Sign(direction)) % pages.Count + pages.Count) % pages.Count];
     }
 }
 

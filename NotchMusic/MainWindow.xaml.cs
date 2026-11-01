@@ -32,6 +32,7 @@ public partial class MainWindow : Window
 {
     // Ukuran dalam satuan WPF: otomatis mengikuti skala layar Windows.
     private const double SmallWidth = 240; // Jam di tengah, kiri-kanan masing-masing 68 (logo / kecepatan internet).
+    private double IdleWidth => _preferences.NoticesEnabled ? SmallWidth : 150; // Tanpa angka kecepatan internet.
     private const double SmallHeight = 34;
     private const double MusicMinWidth = 240;
     private const double MusicHeight = 42;
@@ -120,7 +121,7 @@ public partial class MainWindow : Window
     private string _songAlbum = "";
     private bool HasCompactLyrics => !_closed && !_awaitingMetadata && _session is not null && _playing
         && _lyricDocument is { Instrumental: false } doc && doc.Preview.Length > 0;
-    private bool AnyMenuOpen => NotchMenu.IsOpen || PlayPauseButton.ContextMenu?.IsOpen == true || _gameMenuOpen;
+    private bool AnyMenuOpen => NotchMenu.IsOpen || PlayPauseButton.ContextMenu?.IsOpen == true || _gameMenuOpen || PrayerCity.IsDropDownOpen;
 
     // Satu antrean metadata: perubahan yang beruntun digabung agar tidak menumpuk.
     private bool _metadataBusy;
@@ -170,6 +171,7 @@ public partial class MainWindow : Window
         ApplyTheme(_preferences.Theme);
         _equalizerScales = [EqScale1, EqScale2, EqScale3, EqScale4, EqScale5];
         _lyricShifts = [CompactIncomingShift, CompactOutgoingShift, ExpandedIncomingShift, ExpandedOutgoingShift];
+        InitializePrayerPage();
         InitializeClipboardPages();
         _docked = !_preferences.HasPosition || _preferences.DockedToTop;
         SyncNotchShape(false);
@@ -221,6 +223,7 @@ public partial class MainWindow : Window
         var now = DateTime.Now; // Mengikuti jam dan zona waktu PC.
         CompactClock.Text = ClockFull.Text = now.ToString("HH:mm", _clockCulture);
         FullDate.Text = _clockCulture.TextInfo.ToTitleCase(now.ToString("dddd, dd MMMM yyyy", _clockCulture));
+        CheckPrayerTime();
         _clockTimer.Stop();
         _clockTimer.Interval = TimeSpan.FromMilliseconds((60 - now.Second) * 1000 - now.Millisecond + 50);
         _clockTimer.Start(); // Cukup memperbarui di pergantian menit.
@@ -1156,6 +1159,7 @@ public partial class MainWindow : Window
     private async Task PollNotificationsAsync()
     {
         if (_noticePolling || _closed || _minimizedToTray) return;
+        if (!_preferences.NoticesEnabled) { _seenToasts = null; return; } // Saat dinyalakan lagi, notifikasi lama tidak muncul.
         _noticePolling = true;
         try
         {
@@ -1231,7 +1235,7 @@ public partial class MainWindow : Window
     // Event datang dari thread lain. Controller yang sudah tersambung dilaporkan ulang saat aplikasi mulai.
     private void PadChanged(string text) => Dispatcher.BeginInvoke(() =>
     {
-        if (!_closed && Stopwatch.GetElapsedTime(_padWatchStarted) > TimeSpan.FromSeconds(3)) ShowNotice(text);
+        if (!_closed && _preferences.NoticesEnabled && Stopwatch.GetElapsedTime(_padWatchStarted) > TimeSpan.FromSeconds(3)) ShowNotice(text);
     });
 
     private void UpdatePinButton()
@@ -1357,7 +1361,7 @@ public partial class MainWindow : Window
         CompactPanel.BeginAnimation(OpacityProperty, null); ExpandedHost.BeginAnimation(OpacityProperty, null);
         CompactPanel.Opacity = 1; CompactPanel.Visibility = Visibility.Visible; CompactPanel.IsHitTestVisible = true;
         ExpandedHost.Opacity = 0; ExpandedHost.Visibility = Visibility.Collapsed; ExpandedHost.IsHitTestVisible = false;
-        _sizeTargetWidth = SmallWidth; _sizeTargetHeight = SmallHeight;
+        _sizeTargetWidth = IdleWidth; _sizeTargetHeight = SmallHeight;
         SnapNotchSize();
         // Gambar dibaca kembali saat restore; pilihan lirik dan offset tetap dipertahankan.
         CoverImage.Source = null; _coverFingerprint = null;
@@ -1441,6 +1445,7 @@ public partial class MainWindow : Window
             UpdateClock(); RenderProgress();
             if (_expandedPage == 1 && _clipboardResultsDirty) RefreshClipboardResults();
             if (_expandedPage == GamePageIndex && GameList.ItemsSource is null) RefreshGames(); // Sekali; berikutnya hanya saat daftar diubah.
+            if (_expandedPage == PrayerPageIndex) RenderPrayer();
         }
         else
         {
@@ -2057,7 +2062,7 @@ public partial class MainWindow : Window
         var notice = _notice is not null;
         var wantedWidth = _expanded ? ExpandedWidth
             : notice ? Math.Max(MusicMinWidth, _noticeWidth + CompactInset * 2 + 6)
-            : music ? Math.Max(MusicMinWidth, _compactTextWidth + CompactChrome) : SmallWidth;
+            : music ? Math.Max(MusicMinWidth, _compactTextWidth + CompactChrome) : IdleWidth;
         var width = Math.Min(screenWidth, wantedWidth);
         var height = _expanded ? LargeHeight : music || notice ? MusicHeight : SmallHeight;
         if (Math.Abs(width - _sizeTargetWidth) < 0.5 && height == _sizeTargetHeight) return;
@@ -2267,6 +2272,30 @@ public partial class MainWindow : Window
             SetEqualizerAnimation(false); UpdateCompactState(); SavePreferences();
         };
         NotchMenu.Items.Add(light);
+        NotchMenu.Items.Add(new Separator());
+        NotchMenu.Items.Add(new MenuItem { Header = "Fitur aktif", IsEnabled = false });
+        void Feature(string header, bool on, Action<bool> set)
+        {
+            var item = new MenuItem { Header = header, IsCheckable = true, IsChecked = on };
+            item.Click += (_, _) => { set(item.IsChecked); SavePreferences(); };
+            NotchMenu.Items.Add(item);
+        }
+        Feature("Halaman Clipboard", _preferences.ClipboardEnabled, on =>
+        {
+            _preferences.ClipboardEnabled = on;
+            if (!on) ClipboardClear_Click(this, new RoutedEventArgs()); // Riwayat dibuang saat fitur dimatikan.
+            _clipboardLastSequence = ClipboardNative.Sequence;
+            ApplyPageToggles();
+        });
+        Feature("Halaman Game", _preferences.GamesEnabled, on => { _preferences.GamesEnabled = on; ApplyPageToggles(); });
+        Feature("Halaman Jadwal Salat (dan pengingat)", _preferences.PrayerEnabled, on => { _preferences.PrayerEnabled = on; ApplyPageToggles(); });
+        Feature("Notifikasi dan kecepatan internet", _preferences.NoticesEnabled, on =>
+        {
+            _preferences.NoticesEnabled = on;
+            if (!on) { _noticeTimer.Stop(); _notice = null; }
+            UpdateCompactState();
+        });
+        NotchMenu.Items.Add(new Separator());
         var offline = new MenuItem { Header = "Lirik offline saja (tanpa internet)", IsCheckable = true, IsChecked = _preferences.LyricsOfflineOnly };
         offline.Click += (_, _) => { _preferences.LyricsOfflineOnly = offline.IsChecked; SavePreferences(); };
         NotchMenu.Items.Add(offline);
@@ -2566,6 +2595,12 @@ internal sealed class NotchPreferences
     public List<string> GameOrder { get; set; } = []; // Daftar game di notch (appid Steam atau path shortcut), sesuai urutan.
     public bool LightAnimations { get; set; }
     public bool LyricsOfflineOnly { get; set; } // Tanpa LRCLIB/Deezer/Better Lyrics/Unison.
+    // Fitur yang bisa dimatikan dari menu klik kanan.
+    public bool ClipboardEnabled { get; set; } = true;
+    public bool GamesEnabled { get; set; } = true;
+    public bool PrayerEnabled { get; set; } = true;
+    public bool NoticesEnabled { get; set; } = true; // Notifikasi WA/browser, controller, dan kecepatan internet.
+    public string? PrayerCity { get; set; }
     public int ExpandedPage { get; set; }
     public bool ClipboardRecordingEnabled { get; set; } = true;
     public bool DockedToTop { get; set; } = true;

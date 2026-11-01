@@ -89,4 +89,28 @@ public class CoreTests
         Assert.Equal(60, DesktopNative.PacedFrames(60));
         Assert.Equal(120, DesktopNative.PacedFrames(120));
     }
+
+    // Jadwal Kemenag 2 November 2026 dari api.myquran.com (Subuh, Terbit, Dzuhur, Ashar, Maghrib, Isya).
+    [Theory]
+    [InlineData("Jakarta", "04:08 05:23 11:40 14:55 17:49 19:01")]
+    [InlineData("Surabaya", "03:43 04:58 11:16 14:31 17:27 18:39")]
+    [InlineData("Makassar", "04:19 05:34 11:49 15:06 17:58 19:09")]
+    public void PrayerTimesMatchKemenagWithinOneMinute(string city, string official)
+    {
+        var computed = PrayerTimes.For(new DateOnly(2026, 11, 2), PrayerCities.Find(city));
+        var expected = official.Split(' ').Select(TimeSpan.Parse).ToArray();
+        for (var i = 0; i < 6; i++)
+            Assert.True(Math.Abs((computed[i].Time.TimeOfDay - expected[i]).TotalMinutes) <= 1,
+                $"{city} {computed[i].Name}: {computed[i].Time:HH:mm}, resmi {expected[i]:hh\\:mm}");
+    }
+    [Fact]
+    public void PageNavigationSkipsDisabledPages()
+    {
+        List<int> pages = [0, 2, 3];
+        Assert.Equal(2, NotchPages.Next(pages, 0, 1));
+        Assert.Equal(0, NotchPages.Next(pages, 3, 1));
+        Assert.Equal(3, NotchPages.Next(pages, 0, -1));
+        Assert.Equal(0, NotchPages.Next(pages, 1, 1)); // Halaman aktif sudah dimatikan: kembali ke Musik.
+        Assert.Equal(0, NotchPages.Next([0], 0, 1));
+    }
 }

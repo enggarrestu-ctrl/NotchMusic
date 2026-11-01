@@ -368,7 +368,7 @@
                                VerticalAlignment="Center" AutomationProperties.Name="Jam saat ini" />
                     <!-- Kecepatan internet saat ini; lebar tetap agar notch tidak berubah ukuran tiap detik. -->
                     <!-- Teks kecil: mode Display agar huruf tajam di jendela transparan. -->
-                    <StackPanel Grid.Column="2" Width="60" Margin="8,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                    <StackPanel x:Name="SpeedPanel" Grid.Column="2" Width="60" Margin="8,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center"
                                 TextOptions.TextFormattingMode="Display" AutomationProperties.Name="Kecepatan internet">
                         <TextBlock x:Name="SpeedDown" Text="↓ 0 KB/s" FontSize="10.5" FontWeight="SemiBold" LineHeight="12" LineStackingStrategy="BlockLineHeight" />
                         <TextBlock x:Name="SpeedUp" Text="↑ 0 KB/s" FontSize="10.5" FontWeight="SemiBold" LineHeight="12" LineStackingStrategy="BlockLineHeight" />
@@ -776,6 +776,38 @@
                         </DataTemplate></ItemsControl.ItemTemplate>
                     </ItemsControl>
                     <TextBlock x:Name="GameStatus" Grid.Row="2" Text="Klik buka · seret untuk pindah · + tambah · klik kanan hapus" FontSize="10" Opacity="0.8"
+                               TextAlignment="Center" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Grid>
+                <!-- Halaman jadwal salat: enam waktu hari ini, waktu berikutnya disorot. -->
+                <Grid x:Name="PrayerPage" Margin="0,0,0,8" Visibility="Collapsed" IsHitTestVisible="False">
+                    <Grid.RenderTransform><TranslateTransform x:Name="PrayerPageShift" X="522" /></Grid.RenderTransform>
+                    <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="*" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+                    <Grid>
+                        <TextBlock Text="Jadwal Salat" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <ComboBox x:Name="PrayerCity" Style="{StaticResource ThemedComboBox}" Width="150" MinHeight="22" Height="22" FontSize="11"
+                                  HorizontalAlignment="Right" MaxDropDownHeight="220" ToolTip="Kota untuk jadwal salat"
+                                  AutomationProperties.Name="Kota jadwal salat"
+                                  SelectionChanged="PrayerCity_SelectionChanged" DropDownClosed="PrayerCity_DropDownClosed" />
+                    </Grid>
+                    <ItemsControl x:Name="PrayerList" Grid.Row="1" Margin="0,4,0,2" AutomationProperties.Name="Jadwal salat hari ini">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="6" Rows="1" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate><DataTemplate>
+                            <Border x:Name="Card" Margin="3" CornerRadius="10" Background="{DynamicResource NotchSurface}">
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock x:Name="Name" Text="{Binding Name}" FontSize="11" Foreground="White" Opacity="0.85" HorizontalAlignment="Center" />
+                                    <TextBlock x:Name="Time" Text="{Binding Time}" FontSize="18" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsNext}" Value="True">
+                                    <Setter TargetName="Card" Property="Background" Value="{DynamicResource NotchAccent}" />
+                                    <Setter TargetName="Name" Property="Foreground" Value="{DynamicResource NotchInk}" />
+                                    <Setter TargetName="Time" Property="Foreground" Value="{DynamicResource NotchInk}" />
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock x:Name="PrayerStatus" Grid.Row="2" FontSize="10" Opacity="0.8"
                                TextAlignment="Center" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 </Grid>
                 </Grid>

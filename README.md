@@ -1,6 +1,6 @@
 # NotchMusic
 
-Widget *notch* di bagian atas layar Windows, mirip notch MacBook. Saat diam, notch hanya menampilkan logo, jam, dan kecepatan internet. Saat di-hover, notch terbuka menjadi panel musik, clipboard, dan peluncur game.
+Widget *notch* di bagian atas layar Windows, mirip notch MacBook. Saat diam, notch hanya menampilkan logo, jam, dan kecepatan internet. Saat di-hover, notch terbuka menjadi panel musik, clipboard, peluncur game, dan jadwal salat.
 
 Dibuat dengan WPF (.NET 10). Ringan: sekitar 25–50 MB RAM, dan tetap jalan di PC kantor tanpa GPU.
 
@@ -28,7 +28,13 @@ Dibuat dengan WPF (.NET 10). Ringan: sekitar 25–50 MB RAM, dan tetap jalan di 
 - Peluncur game sekali klik: hasil scan game Steam terakhir dimainkan, plus shortcut tambahanmu sendiri.
 - Urutan diatur dengan seret, game dihapus lewat klik kanan.
 
+**Jadwal Salat**
+- Enam waktu salat hari ini untuk kota pilihan (49 kota di Indonesia), waktu berikutnya disorot.
+- Dihitung offline dengan kriteria Kemenag RI; selisih dengan jadwal resmi maksimal 1 menit.
+- Pengingat singkat di notch kecil saat masuk waktu salat.
+
 **Lainnya**
+- Setiap fitur (Clipboard, Game, Jadwal Salat, Notifikasi dan kecepatan internet) bisa dimatikan dari menu klik kanan.
 - Notifikasi WhatsApp dan browser tampil singkat di notch. Notifikasi tidak ditampilkan saat presentasi atau saat ada aplikasi layar penuh.
 - Pemberitahuan controller tersambung/terputus.
 - Tema bawaan (termasuk **Hitam Legam**) dan editor tema kustom.
@@ -74,6 +80,7 @@ dotnet publish NotchMusic/NotchMusic.csproj -p:PublishProfile=FolderProfile
 | `NotchMusic/ClipboardFeature.cs` | Riwayat clipboard dan perpindahan halaman |
 | `NotchMusic/GameFeature.cs` | Peluncur game dan pembaca data Steam |
 | `NotchMusic/NetSpeedFeature.cs` | Kecepatan internet |
+| `NotchMusic/PrayerFeature.cs` | Jadwal salat, daftar kota, dan pengingat |
 | `NotchMusic.Tests/` | Tes xUnit |
 
 ## Lisensi

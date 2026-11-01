@@ -15,7 +15,8 @@ public partial class MainWindow
 
     private void UpdateSpeedTimer()
     {
-        var run = !_closed && !_minimizedToTray && !_expanded && CompactIdle.Visibility == Visibility.Visible;
+        SpeedPanel.Visibility = _preferences.NoticesEnabled ? Visibility.Visible : Visibility.Collapsed;
+        var run = !_closed && !_minimizedToTray && !_expanded && _preferences.NoticesEnabled && CompactIdle.Visibility == Visibility.Visible;
         if (run == _speedTimer.IsEnabled) return;
         if (!run) { _speedTimer.Stop(); return; }
         _speedStamp = 0; // Sampel pertama hanya mengambil titik awal.
