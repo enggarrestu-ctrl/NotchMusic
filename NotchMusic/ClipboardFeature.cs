@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
@@ -224,16 +224,19 @@ public partial class MainWindow
         var incoming = PageAt(_expandedPage);
         var oldShift = ShiftAt(previous);
         var newShift = ShiftAt(_expandedPage);
-        var distance = PageViewport.Width * Math.Sign(direction);
+        // Shared axis (Material): geser pendek + ganti pudar. Frame yang telat di jendela transparan
+        // hanya menggeser beberapa piksel, jadi tidak terlihat patah seperti geser selebar halaman.
+        var distance = 48.0 * Math.Sign(direction);
         outgoing.Visibility = incoming.Visibility = Visibility.Visible;
         outgoing.IsHitTestVisible = incoming.IsHitTestVisible = false;
         outgoing.Opacity = 1; incoming.Opacity = 0;
         oldShift.X = 0; newShift.X = distance;
-        var duration = TimeSpan.FromMilliseconds(LightAnimations ? 180 : 240);
-        DoubleAnimation Animation(double from, double to)
+        var total = LightAnimations ? 200 : 280;
+        var swap = total * 0.35; // Halaman lama habis memudar di sini; halaman baru mulai tampil.
+        DoubleAnimation Animation(double from, double to, double begin = 0, double? length = null)
         {
-            var animation = new DoubleAnimation(from, to, duration)
-            { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.HoldEnd };
+            var animation = new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(length ?? total - begin))
+            { BeginTime = TimeSpan.FromMilliseconds(begin), EasingFunction = Motion.Settle, FillBehavior = FillBehavior.HoldEnd };
             Timeline.SetDesiredFrameRate(animation, AnimationFrames);
             return animation;
         }
@@ -247,8 +250,8 @@ public partial class MainWindow
         };
         oldShift.BeginAnimation(TranslateTransform.XProperty, Animation(0, -distance), HandoffBehavior.SnapshotAndReplace);
         newShift.BeginAnimation(TranslateTransform.XProperty, enter, HandoffBehavior.SnapshotAndReplace);
-        outgoing.BeginAnimation(OpacityProperty, Animation(1, 0), HandoffBehavior.SnapshotAndReplace);
-        incoming.BeginAnimation(OpacityProperty, Animation(0, 1), HandoffBehavior.SnapshotAndReplace);
+        outgoing.BeginAnimation(OpacityProperty, Animation(1, 0, 0, swap), HandoffBehavior.SnapshotAndReplace);
+        incoming.BeginAnimation(OpacityProperty, Animation(0, 1, swap), HandoffBehavior.SnapshotAndReplace);
     }
 
     private void CompletePageTransition()
