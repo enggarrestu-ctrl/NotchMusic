@@ -113,4 +113,13 @@ public class CoreTests
         Assert.Equal(0, NotchPages.Next(pages, 1, 1)); // Halaman aktif sudah dimatikan: kembali ke Musik.
         Assert.Equal(0, NotchPages.Next([0], 0, 1));
     }
+
+    [Fact]
+    public void CountdownReadsNaturally()
+    {
+        Assert.Equal("59 menit lagi", MainWindow.Countdown(TimeSpan.FromMinutes(58.2)));
+        Assert.Equal("1 jam lagi", MainWindow.Countdown(TimeSpan.FromMinutes(59.5)));
+        Assert.Equal("1 jam 5 menit lagi", MainWindow.Countdown(TimeSpan.FromMinutes(65)));
+        Assert.Equal("kurang dari 1 menit", MainWindow.Countdown(TimeSpan.Zero));
+    }
 }

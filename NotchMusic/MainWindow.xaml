@@ -778,10 +778,10 @@
                     <TextBlock x:Name="GameStatus" Grid.Row="2" Text="Klik buka · seret untuk pindah · + tambah · klik kanan hapus" FontSize="10" Opacity="0.8"
                                TextAlignment="Center" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 </Grid>
-                <!-- Halaman jadwal salat: enam waktu hari ini, waktu berikutnya disorot. -->
+                <!-- Halaman jadwal salat: kartu besar = waktu berikutnya + hitung mundur; deret kanan = enam waktu hari ini. -->
                 <Grid x:Name="PrayerPage" Margin="0,0,0,8" Visibility="Collapsed" IsHitTestVisible="False">
                     <Grid.RenderTransform><TranslateTransform x:Name="PrayerPageShift" X="522" /></Grid.RenderTransform>
-                    <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="*" /><RowDefinition Height="16" /></Grid.RowDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                     <Grid>
                         <TextBlock Text="Jadwal Salat" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
                         <ComboBox x:Name="PrayerCity" Style="{StaticResource ThemedComboBox}" Width="150" MinHeight="22" Height="22" FontSize="11"
@@ -789,26 +789,42 @@
                                   AutomationProperties.Name="Kota jadwal salat"
                                   SelectionChanged="PrayerCity_SelectionChanged" DropDownClosed="PrayerCity_DropDownClosed" />
                     </Grid>
-                    <ItemsControl x:Name="PrayerList" Grid.Row="1" Margin="0,4,0,2" AutomationProperties.Name="Jadwal salat hari ini">
-                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="6" Rows="1" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate><DataTemplate>
-                            <Border x:Name="Card" Margin="3" CornerRadius="10" Background="{DynamicResource NotchSurface}">
-                                <StackPanel VerticalAlignment="Center">
-                                    <TextBlock x:Name="Name" Text="{Binding Name}" FontSize="11" Foreground="White" Opacity="0.85" HorizontalAlignment="Center" />
-                                    <TextBlock x:Name="Time" Text="{Binding Time}" FontSize="18" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Center" />
-                                </StackPanel>
-                            </Border>
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding IsNext}" Value="True">
-                                    <Setter TargetName="Card" Property="Background" Value="{DynamicResource NotchAccent}" />
-                                    <Setter TargetName="Name" Property="Foreground" Value="{DynamicResource NotchInk}" />
-                                    <Setter TargetName="Time" Property="Foreground" Value="{DynamicResource NotchInk}" />
-                                </DataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate></ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock x:Name="PrayerStatus" Grid.Row="2" FontSize="10" Opacity="0.8"
-                               TextAlignment="Center" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <Grid Grid.Row="1" Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="128" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Border CornerRadius="12" Background="{DynamicResource NotchAccent}" Padding="12,6" Margin="0,0,6,0"
+                                AutomationProperties.Name="Waktu salat berikutnya">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock x:Name="PrayerNextLabel" Text="BERIKUTNYA" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource NotchInk}" Opacity="0.7" />
+                                <TextBlock Foreground="{DynamicResource NotchInk}" TextTrimming="CharacterEllipsis">
+                                    <Run x:Name="PrayerNextName" Text="Isya" FontSize="13" FontWeight="SemiBold" />
+                                    <Run x:Name="PrayerNextTime" Text="19.01" FontSize="22" FontWeight="Bold" />
+                                </TextBlock>
+                                <TextBlock x:Name="PrayerCountdown" Text="59 menit lagi" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource NotchInk}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </Border>
+                        <ItemsControl x:Name="PrayerList" Grid.Column="1" AutomationProperties.Name="Jadwal salat hari ini">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="6" Rows="1" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate><DataTemplate>
+                                <Border x:Name="Card" Margin="3,0" CornerRadius="10" Background="{DynamicResource NotchSurface}"
+                                        BorderBrush="{DynamicResource NotchAccent}" BorderThickness="0">
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock x:Name="Name" Text="{Binding Name}" FontSize="10" Foreground="White" Opacity="0.75" HorizontalAlignment="Center" />
+                                        <TextBlock Text="{Binding Time}" FontSize="15" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
+                                <DataTemplate.Triggers>
+                                    <!-- Sudah lewat: diredupkan. Berikutnya: garis aksen (kartu besar memberi keterangan teksnya). -->
+                                    <DataTrigger Binding="{Binding IsPast}" Value="True"><Setter TargetName="Card" Property="Opacity" Value="0.45" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding IsNext}" Value="True">
+                                        <Setter TargetName="Card" Property="BorderThickness" Value="1.5" />
+                                        <Setter TargetName="Name" Property="Foreground" Value="{DynamicResource NotchAccent}" />
+                                        <Setter TargetName="Name" Property="Opacity" Value="1" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate></ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
                 </Grid>
                 </Grid>
                 <!-- Jarak dari tepi: padding Shell 12,8 + margin ini, aman dari lengkungan sudut. -->

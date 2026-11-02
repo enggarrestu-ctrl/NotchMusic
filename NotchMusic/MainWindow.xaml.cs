@@ -1296,6 +1296,7 @@ public partial class MainWindow : Window
             Resources[keys[i]] = brush;
         }
         NotchViewport.SetPalette((Brush)Resources["NotchBackground"], (Brush)Resources["NotchSurface"]);
+        Resources["NotchPopup"] = Resources["NotchSoft"]; // Daftar dropdown padat; teksnya NotchInk sama seperti kotak pilihannya.
         // Warna ke-6 opsional: tema bawaan memakai warna aksen untuk garis progres.
         var progress = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors.Length > 5 ? colors[5] : colors[3]));
         progress.Freeze();

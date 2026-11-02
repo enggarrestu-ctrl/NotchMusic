@@ -36,18 +36,24 @@ public partial class MainWindow
         var city = PrayerCities.Find(_preferences.PrayerCity);
         var now = city.Now;
         var times = PrayerTimes.For(DateOnly.FromDateTime(now), city);
-        var next = times.FirstOrDefault(x => x.Prays && x.Time > now);
-        PrayerList.ItemsSource = times.Select(x => new PrayerRow(x.Name, x.Time.ToString("HH.mm", CultureInfo.InvariantCulture), x == next)).ToList();
-        if (next is null)
-        {
-            var subuh = PrayerTimes.For(DateOnly.FromDateTime(now).AddDays(1), city)[0];
-            PrayerStatus.Text = $"Subuh besok {subuh.Time:HH.mm} · {city.Zone}";
-        }
-        else
-        {
-            var left = next.Time - now;
-            PrayerStatus.Text = $"{next.Name} dalam {(left.Hours > 0 ? $"{left.Hours} j " : "")}{left.Minutes + (left.Seconds > 0 ? 1 : 0)} m · {city.Zone}";
-        }
+        var today = times.FirstOrDefault(x => x.Prays && x.Time > now);
+        // Lewat Isya: berikutnya Subuh besok.
+        var next = today ?? PrayerTimes.For(DateOnly.FromDateTime(now).AddDays(1), city)[0];
+        PrayerList.ItemsSource = times.Select(x => new PrayerRow(x.Name, x.Time.ToString("HH.mm", CultureInfo.InvariantCulture),
+            x == today, x.Time <= now)).ToList();
+        PrayerNextLabel.Text = today is null ? "BESOK" : "BERIKUTNYA";
+        PrayerNextName.Text = next.Name + " ";
+        PrayerNextTime.Text = next.Time.ToString("HH.mm", CultureInfo.InvariantCulture);
+        PrayerCountdown.Text = Countdown(next.Time - now) + " · " + city.Zone;
+    }
+
+    // "1 jam 5 menit lagi" / "59 menit lagi" / "kurang dari 1 menit": menit dibulatkan ke atas agar tidak terlambat.
+    internal static string Countdown(TimeSpan left)
+    {
+        var minutes = (int)Math.Ceiling(Math.Max(0, left.TotalMinutes));
+        if (minutes < 1) return "kurang dari 1 menit";
+        var hours = minutes / 60; minutes %= 60;
+        return hours == 0 ? $"{minutes} menit lagi" : minutes == 0 ? $"{hours} jam lagi" : $"{hours} jam {minutes} menit lagi";
     }
 
     // Dipanggil tiap pergantian menit oleh jam notch.
@@ -63,7 +69,7 @@ public partial class MainWindow
     }
 }
 
-internal sealed record PrayerRow(string Name, string Time, bool IsNext);
+internal sealed record PrayerRow(string Name, string Time, bool IsNext, bool IsPast);
 internal sealed record PrayerTime(string Name, DateTime Time, bool Prays);
 internal sealed record PrayerCity(string Name, double Latitude, double Longitude, int UtcOffset)
 {
