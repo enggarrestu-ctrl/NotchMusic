@@ -1437,7 +1437,8 @@ public partial class MainWindow : Window
         _hoverStartedTimestamp = Stopwatch.GetTimestamp();
         var version = ++_transitionVersion;
         var remaining = Math.Abs((expand ? 1 : 0) - ExpandedHost.Opacity);
-        var fullDuration = LightAnimations ? 220 : 280;
+        // Menutup lebih singkat dari membuka (exit-faster-than-enter).
+        var fullDuration = expand ? (LightAnimations ? 260 : Motion.OpenMilliseconds) : (LightAnimations ? 160 : Motion.CloseMilliseconds);
         _hoverMilliseconds = (int)Math.Clamp(fullDuration * Math.Sqrt(remaining), 80, fullDuration);
         SyncNotchShape();
         // Media events sudah menjaga status pemutar; hover tidak perlu memanggil WinRT lagi.
@@ -1459,12 +1460,15 @@ public partial class MainWindow : Window
         // Siapkan teks, ukuran akhir, dan clip sebelum lapisan baru mulai terlihat.
         CompactPanel.Visibility = ExpandedHost.Visibility = Visibility.Visible;
         CompactPanel.IsHitTestVisible = ExpandedHost.IsHitTestVisible = false;
-        FadePanel(CompactPanel, expand ? 0 : 1, version);
-        FadePanel(ExpandedHost, expand ? 1 : 0, version);
+        // Lapisan yang pergi memudar cepat; lapisan yang datang menyusul setelah bentuk notch mulai berubah (stagger).
+        var leave = (int)(_hoverMilliseconds * 0.6);
+        var delay = expand ? Motion.ContentDelayMilliseconds : (int)(_hoverMilliseconds * 0.35);
+        FadePanel(CompactPanel, expand ? 0 : 1, version, expand ? 0 : delay, expand ? leave : _hoverMilliseconds - delay);
+        FadePanel(ExpandedHost, expand ? 1 : 0, version, expand ? delay : 0, expand ? _hoverMilliseconds - delay : leave);
         AnimateExpandedContent(expand, version);
     }
 
-    private void FadePanel(FrameworkElement panel, double target, int version)
+    private void FadePanel(FrameworkElement panel, double target, int version, int delay, int duration)
     {
         var from = panel.Opacity;
         panel.BeginAnimation(OpacityProperty, null);
@@ -1475,11 +1479,11 @@ public partial class MainWindow : Window
             if (target == 1) _hoverTransitioning = false;
             panel.IsHitTestVisible = target == 1; return;
         }
-        // Kedua lapisan memakai awal, durasi, dan kurva yang sama.
-        // Opacity saling melengkapi, termasuk ketika hover dibalik di tengah jalan.
+        // Mulai dari opacity yang sedang tampil, termasuk ketika hover dibalik di tengah jalan.
         // Layout sudah disiapkan di SetExpanded, jadi tidak perlu fase kosong sebelum masuk.
-        var animation = new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(_hoverMilliseconds))
+        var animation = new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(Math.Max(1, duration)))
         {
+            BeginTime = TimeSpan.FromMilliseconds(delay),
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
             FillBehavior = FillBehavior.HoldEnd
         };
@@ -1507,7 +1511,7 @@ public partial class MainWindow : Window
         // Mulai dari nilai yang sedang tampil, termasuk saat animasi berbalik arah.
         var animation = new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(_hoverMilliseconds))
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            EasingFunction = entering ? Motion.Open : Motion.Settle, // Isi ikut memantul kecil bersama bentuk notch.
             FillBehavior = FillBehavior.Stop
         };
         Timeline.SetDesiredFrameRate(animation, AnimationFrames);
@@ -2183,6 +2187,15 @@ public partial class MainWindow : Window
         // gabungkan HWND sekarang, bentuk lama, dan panggung tujuan.
         var current = new Rect(window.Left, window.Top, window.Width, window.Height);
         var union = Rect.Union(Rect.Union(current, oldScreen), StageScreenBounds(targetScreen));
+        var growing = targetScreen.Width * targetScreen.Height > oldScreen.Width * oldScreen.Height;
+        if (growing)
+        {
+            // Ruang untuk pantulan pegas (~4% dari perubahan ukuran) agar tepi notch tidak terpotong jendela.
+            var dx = Math.Abs(targetScreen.Width - oldScreen.Width) * 0.03 + 2;
+            var dy = Math.Abs(targetScreen.Height - oldScreen.Height) * 0.06 + 2;
+            union = new Rect(union.Left - dx, union.Top, union.Width + 2 * dx, union.Height + dy);
+        }
+        var ease = growing ? Motion.Open : Motion.Settle;
         var host = new Rect(Math.Floor(union.Left), Math.Floor(union.Top),
             Math.Ceiling(union.Right) - Math.Floor(union.Left), Math.Ceiling(union.Bottom) - Math.Floor(union.Top));
         Rect Local(Rect screen) => new((screen.X - host.X) / dpi.DpiScaleX, (screen.Y - host.Y) / dpi.DpiScaleY,
@@ -2199,17 +2212,17 @@ public partial class MainWindow : Window
         ShellShift.BeginAnimation(TranslateTransform.XProperty, null); ShellShift.X = 0;
         ShellShift.BeginAnimation(TranslateTransform.YProperty, null); ShellShift.Y = 0;
         var slide = new DoubleAnimation(contentShift, 0, TimeSpan.FromMilliseconds(milliseconds))
-        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.HoldEnd };
+        { EasingFunction = ease, FillBehavior = FillBehavior.HoldEnd };
         Timeline.SetDesiredFrameRate(slide, AnimationFrames);
         ShellShift.BeginAnimation(TranslateTransform.XProperty, slide, HandoffBehavior.SnapshotAndReplace);
         var slideY = new DoubleAnimation((oldContentTop - targetScreen.Y) / dpi.DpiScaleY, 0,
             TimeSpan.FromMilliseconds(milliseconds))
-        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.HoldEnd };
+        { EasingFunction = ease, FillBehavior = FillBehavior.HoldEnd };
         Timeline.SetDesiredFrameRate(slideY, AnimationFrames);
         ShellShift.BeginAnimation(TranslateTransform.YProperty, slideY, HandoffBehavior.SnapshotAndReplace);
         var animation = new RectAnimation(from, target, TimeSpan.FromMilliseconds(milliseconds))
         {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            EasingFunction = ease,
             FillBehavior = FillBehavior.HoldEnd
         };
         Timeline.SetDesiredFrameRate(animation, AnimationFrames);

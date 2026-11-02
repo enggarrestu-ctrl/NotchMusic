@@ -122,4 +122,16 @@ public class CoreTests
         Assert.Equal("1 jam 5 menit lagi", MainWindow.Countdown(TimeSpan.FromMinutes(65)));
         Assert.Equal("kurang dari 1 menit", MainWindow.Countdown(TimeSpan.Zero));
     }
+
+    [Fact]
+    public void SpringEaseLandsExactlyWithSmallBounce()
+    {
+        var open = Motion.Open; var settle = Motion.Settle;
+        Assert.Equal(0, open.Ease(0), 6); Assert.Equal(1, open.Ease(1), 6);
+        Assert.Equal(0, settle.Ease(0), 6); Assert.Equal(1, settle.Ease(1), 6);
+        var samples = Enumerable.Range(0, 201).Select(i => i / 200.0).ToArray();
+        Assert.InRange(samples.Max(open.Ease), 1.02, 1.07); // Pantulan kecil, tidak berlebihan.
+        Assert.True(samples.All(x => settle.Ease(x) <= 1.0001)); // Menutup tanpa pantulan.
+        Assert.True(open.Ease(0.3) > 0.7); // Cepat di awal: terasa responsif.
+    }
 }
