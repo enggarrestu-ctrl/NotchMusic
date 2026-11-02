@@ -1460,9 +1460,10 @@ public partial class MainWindow : Window
         // Siapkan teks, ukuran akhir, dan clip sebelum lapisan baru mulai terlihat.
         CompactPanel.Visibility = ExpandedHost.Visibility = Visibility.Visible;
         CompactPanel.IsHitTestVisible = ExpandedHost.IsHitTestVisible = false;
-        // Lapisan yang pergi memudar cepat; lapisan yang datang menyusul setelah bentuk notch mulai berubah (stagger).
-        var leave = (int)(_hoverMilliseconds * 0.6);
-        var delay = expand ? Motion.ContentDelayMilliseconds : (int)(_hoverMilliseconds * 0.35);
+        // Lapisan yang pergi hilang di sepertiga awal, sebelum tepi notch memotongnya; lapisan yang datang
+        // menyusul setelah lapisan lama hampir habis, jadi teks lama dan baru tidak menumpuk (stagger).
+        var leave = (int)(_hoverMilliseconds * 0.35);
+        var delay = expand ? Motion.ContentDelayMilliseconds : leave;
         FadePanel(CompactPanel, expand ? 0 : 1, version, expand ? 0 : delay, expand ? leave : _hoverMilliseconds - delay);
         FadePanel(ExpandedHost, expand ? 1 : 0, version, expand ? delay : 0, expand ? _hoverMilliseconds - delay : leave);
         AnimateExpandedContent(expand, version);

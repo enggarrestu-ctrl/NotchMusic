@@ -6,7 +6,7 @@ namespace NotchMusic;
 // Gerak notch (panduan UI/UX Pro Max: spring-physics, exit-faster-than-enter, stagger-sequence).
 internal static class Motion
 {
-    public const int OpenMilliseconds = 340, CloseMilliseconds = 200, ContentDelayMilliseconds = 50;
+    public const int OpenMilliseconds = 340, CloseMilliseconds = 200, ContentDelayMilliseconds = 90;
 
     // Membuka: pegas dengan pantulan kecil (~4%), seperti Dynamic Island.
     public static readonly IEasingFunction Open = Frozen(new SpringEase { Damping = 0.72 });
