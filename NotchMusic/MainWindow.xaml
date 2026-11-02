@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:NotchMusic"
         Title="NotchMusic" Width="128" Height="34" Cursor="Arrow"
         WindowStyle="None" ResizeMode="NoResize"
-        AllowsTransparency="True" Background="Transparent"
+        Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False"
         WindowStartupLocation="Manual"
         FontFamily="Segoe UI" Foreground="White"

@@ -163,6 +163,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Dengan GPU: transparansi diurus DWM (gambar langsung dari GPU, tanpa salinan per frame seperti jendela layered).
+        // Tanpa GPU (render software): DWM tidak menjaga piksel transparan, jadi tetap jendela layered.
+        AllowsTransparency = RenderCapability.Tier >> 16 == 0;
         NotchViewport.SetPalette((Brush)FindResource("NotchBackground"), (Brush)FindResource("NotchSurface"));
         if (DesignerProperties.GetIsInDesignMode(this)) return;
         foreach (var resource in Resources.Values)
@@ -950,6 +953,11 @@ public partial class MainWindow : Window
         _foregroundHook = DesktopNative.WatchForeground(_foregroundChanged);
         _windowSource = HwndSource.FromHwnd(_windowHandle);
         _windowSource?.AddHook(Window_Hook);
+        if (!AllowsTransparency && _windowSource?.CompositionTarget is { } composition)
+        {
+            composition.BackgroundColor = Colors.Transparent;
+            DesktopNative.UseDwmTransparency(_windowHandle);
+        }
         StartClipboardListener();
         _tray = new NativeTrayIcon(_windowHandle,
             () => OnUi(RestoreFromTray),
@@ -1046,6 +1054,7 @@ public partial class MainWindow : Window
         ++_sizeVersion; ++_transitionVersion;
         NotchViewport.AnimateBounds(null);
         NotchViewport.VisibleBounds = new Rect(0, 0, visible.Width, visible.Height);
+        ClipHitArea(null); // Saat diseret jendela = kotak notch.
         _sizeTargetWidth = visible.Width; _sizeTargetHeight = visible.Height;
         _morphing = false;
         // Pindahkan asal clip/HWND tanpa mengubah letak isi yang sedang terlihat.
@@ -2142,6 +2151,19 @@ public partial class MainWindow : Window
         ConfigurePanelLayout(local);
         _morphing = false;
         SetHostBounds(stage);
+        ClipHitArea(local);
+    }
+
+    // Jendela DWM tidak tembus klik di piksel transparan (beda dengan jendela layered): batasi jendela ke kotak notch.
+    // null = seluruh jendela (dipakai sebentar selama morph).
+    private void ClipHitArea(Rect? local)
+    {
+        if (AllowsTransparency || _windowHandle == IntPtr.Zero) return;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        DesktopNative.SetHitRegion(_windowHandle, local is { } r
+            ? new Int32Rect((int)Math.Floor(r.X * dpi.DpiScaleX), (int)Math.Floor(r.Y * dpi.DpiScaleY),
+                (int)Math.Ceiling(r.Width * dpi.DpiScaleX), (int)Math.Ceiling(r.Height * dpi.DpiScaleY))
+            : null);
     }
 
     // Akhir morph: hanya lepaskan animasi ke nilai akhirnya. HWND sengaja tidak diubah,
@@ -2149,6 +2171,7 @@ public partial class MainWindow : Window
     private void SettleMorph(Rect target)
     {
         NotchViewport.VisibleBounds = target;
+        ClipHitArea(target);
         NotchViewport.AnimateBounds(null);
         ShellShift.BeginAnimation(TranslateTransform.XProperty, null);
         ShellShift.BeginAnimation(TranslateTransform.YProperty, null);
@@ -2208,6 +2231,7 @@ public partial class MainWindow : Window
         NotchViewport.AnimateBounds(null);
         NotchViewport.VisibleBounds = from;
         SetHostBounds(host); // Ukuran buffer/jendela ditetapkan sekali sebelum transisi.
+        ClipHitArea(null); // Selama morph seluruh panggung boleh tampil; dipersempit lagi di SettleMorph.
         ConfigurePanelLayout(target);
         var contentShift = (oldContentCenter - targetScreen.X - target.Width * dpi.DpiScaleX / 2) / dpi.DpiScaleX;
         ShellShift.BeginAnimation(TranslateTransform.XProperty, null); ShellShift.X = 0;
@@ -3047,6 +3071,33 @@ internal static class DesktopNative
     private static extern bool EnumDisplaySettings(string? device, int mode, ref DevMode devMode);
 
     // WS_EX_TOOLWINDOW: tidak muncul di Alt+Tab (ShowInTaskbar=false saja tidak cukup).
+    internal static void UseDwmTransparency(IntPtr window)
+    {
+        var margins = new DwmMargins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+        DwmExtendFrameIntoClientArea(window, ref margins); // Piksel transparan WPF jadi transparan di layar.
+        var noRound = 1; DwmSetWindowAttribute(window, 33, ref noRound, sizeof(int)); // DWMWA_WINDOW_CORNER_PREFERENCE: jangan dibulatkan.
+        var noBorder = unchecked((int)0xFFFFFFFE); DwmSetWindowAttribute(window, 34, ref noBorder, sizeof(int)); // DWMWA_BORDER_COLOR: tanpa garis.
+    }
+
+    internal static void SetHitRegion(IntPtr window, Int32Rect? pixels)
+    {
+        var region = pixels is { } r ? CreateRectRgn(r.X, r.Y, r.X + r.Width, r.Y + r.Height) : IntPtr.Zero;
+        if (SetWindowRgn(window, region, true) == 0 && region != IntPtr.Zero) DeleteObject(region); // Berhasil = milik Windows.
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DwmMargins { public int Left, Right, Top, Bottom; }
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmExtendFrameIntoClientArea(IntPtr window, ref DwmMargins margins);
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr handle);
+    [DllImport("user32.dll")]
+    private static extern int SetWindowRgn(IntPtr window, IntPtr region, bool redraw);
+
     internal static void HideFromAltTab(IntPtr window)
         => SetWindowLongPtr(window, -20, new IntPtr(GetWindowLongPtr(window, -20).ToInt64() | 0x80)); // GWL_EXSTYLE
 
