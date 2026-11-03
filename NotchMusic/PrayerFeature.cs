@@ -39,8 +39,7 @@ public partial class MainWindow
         var today = times.FirstOrDefault(x => x.Prays && x.Time > now);
         // Lewat Isya: berikutnya Subuh besok.
         var next = today ?? PrayerTimes.For(DateOnly.FromDateTime(now).AddDays(1), city)[0];
-        PrayerList.ItemsSource = times.Select(x => new PrayerRow(x.Name, x.Time.ToString("HH.mm", CultureInfo.InvariantCulture),
-            x == today, x.Time <= now)).ToList();
+        DrawPrayerSky(times, now, today);
         PrayerNextLabel.Text = today is null ? "BESOK" : "BERIKUTNYA";
         PrayerNextName.Text = next.Name + " ";
         PrayerNextTime.Text = next.Time.ToString("HH.mm", CultureInfo.InvariantCulture);
@@ -69,7 +68,6 @@ public partial class MainWindow
     }
 }
 
-internal sealed record PrayerRow(string Name, string Time, bool IsNext, bool IsPast);
 internal sealed record PrayerTime(string Name, DateTime Time, bool Prays);
 internal sealed record PrayerCity(string Name, double Latitude, double Longitude, int UtcOffset)
 {

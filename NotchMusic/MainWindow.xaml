@@ -803,27 +803,9 @@
                                            Foreground="{DynamicResource NotchInk}" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </Border>
-                        <ItemsControl x:Name="PrayerList" Grid.Column="1" AutomationProperties.Name="Jadwal salat hari ini">
-                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="6" Rows="1" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate><DataTemplate>
-                                <Border x:Name="Card" Margin="3,0" CornerRadius="10" Background="{DynamicResource NotchSurface}"
-                                        BorderBrush="{DynamicResource NotchAccent}" BorderThickness="0">
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock x:Name="Name" Text="{Binding Name}" FontSize="10" Foreground="White" Opacity="0.75" HorizontalAlignment="Center" />
-                                        <TextBlock Text="{Binding Time}" FontSize="15" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Center" />
-                                    </StackPanel>
-                                </Border>
-                                <DataTemplate.Triggers>
-                                    <!-- Sudah lewat: diredupkan. Berikutnya: garis aksen (kartu besar memberi keterangan teksnya). -->
-                                    <DataTrigger Binding="{Binding IsPast}" Value="True"><Setter TargetName="Card" Property="Opacity" Value="0.45" /></DataTrigger>
-                                    <DataTrigger Binding="{Binding IsNext}" Value="True">
-                                        <Setter TargetName="Card" Property="BorderThickness" Value="1.5" />
-                                        <Setter TargetName="Name" Property="Foreground" Value="{DynamicResource NotchAccent}" />
-                                        <Setter TargetName="Name" Property="Opacity" Value="1" />
-                                    </DataTrigger>
-                                </DataTemplate.Triggers>
-                            </DataTemplate></ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <!-- Lintasan matahari: digambar ulang tiap menit oleh RenderPrayer (PrayerSky.cs). -->
+                        <Canvas x:Name="PrayerSky" Grid.Column="1" Width="388" Height="86" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                AutomationProperties.Name="Jadwal salat hari ini" />
                     </Grid>
                 </Grid>
                 </Grid>

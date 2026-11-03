@@ -134,4 +134,18 @@ public class CoreTests
         Assert.True(samples.All(x => settle.Ease(x) <= 1.0001)); // Menutup tanpa pantulan.
         Assert.True(open.Ease(0.3) > 0.7); // Cepat di awal: terasa responsif.
     }
+
+    [Fact]
+    public void SunPathRisesToDzuhurAndStaysInsideCanvas()
+    {
+        var times = PrayerTimes.For(new DateOnly(2026, 11, 2), PrayerCities.Find("Jakarta"));
+        var sky = new SkyLayout(times, 388, 86);
+        var xs = times.Select(x => sky.X(x.Time)).ToList();
+        Assert.Equal(xs.OrderBy(x => x), xs); // Urut kiri ke kanan sesuai waktu.
+        Assert.All(times, t => Assert.InRange(sky.X(t.Time), 0, 388));
+        var dzuhur = sky.Y(times[2].Time);
+        Assert.True(dzuhur < sky.Y(times[3].Time) && dzuhur >= 0); // Dzuhur titik tertinggi, tetap di dalam kanvas.
+        Assert.Equal(sky.Horizon, sky.Y(times[0].Time)); // Subuh di cakrawala.
+        Assert.InRange(sky.X(times[0].Time.AddHours(-6)), 0, 388); // Tengah malam tetap di dalam kanvas.
+    }
 }
