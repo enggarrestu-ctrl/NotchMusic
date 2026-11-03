@@ -33,6 +33,12 @@ public partial class MainWindow
             var marker = new Ellipse { Width = isNext ? 9 : 6, Height = isNext ? 9 : 6, Fill = past ? accent : Brushes.Black,
                 Stroke = isNext || past ? accent : Brushes.White, StrokeThickness = isNext ? 2 : 1.2, Opacity = past && !isNext ? 0.6 : 1 };
             Place(marker, x - marker.Width / 2, y - marker.Height / 2);
+            // Semua label sejajar di bawah cakrawala seperti sumbu waktu (posisi konsisten, UI/UX Pro Max);
+            // titik di busur (Dzuhur, Ashar) disambung ke labelnya dengan garis tipis.
+            if (y < layout.Horizon - 1)
+                sky.Children.Add(new Line { X1 = x, X2 = x, Y1 = y + 5, Y2 = layout.Horizon, Stroke = dim, StrokeThickness = 1,
+                    StrokeDashArray = [1.5, 2.5] });
+            y = layout.Horizon;
             var label = new StackPanel { Width = 52, Opacity = past && !isNext ? 0.5 : 1 };
             label.Children.Add(new TextBlock { Text = time.Name, FontSize = 9, Foreground = isNext ? accent : Brushes.White,
                 Opacity = isNext ? 1 : 0.8, TextAlignment = TextAlignment.Center });
