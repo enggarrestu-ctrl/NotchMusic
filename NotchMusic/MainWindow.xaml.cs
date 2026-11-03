@@ -2155,7 +2155,7 @@ public partial class MainWindow : Window
     }
 
     // Jendela DWM tidak tembus klik di piksel transparan (beda dengan jendela layered): batasi jendela ke kotak notch.
-    // null = seluruh jendela (dipakai sebentar selama morph).
+    // null = seluruh jendela (hanya saat diseret, ketika jendela = kotak notch).
     private void ClipHitArea(Rect? local)
     {
         if (AllowsTransparency || _windowHandle == IntPtr.Zero) return;
@@ -2220,6 +2220,8 @@ public partial class MainWindow : Window
             union = new Rect(union.Left - dx, union.Top, union.Width + 2 * dx, union.Height + dy);
         }
         var ease = growing ? Motion.Open : Motion.Settle;
+        var pad = growing ? new Vector(Math.Abs(targetScreen.Width - oldScreen.Width) * 0.03 + 2,
+            Math.Abs(targetScreen.Height - oldScreen.Height) * 0.06 + 2) / dpi.DpiScaleX : default;
         var host = new Rect(Math.Floor(union.Left), Math.Floor(union.Top),
             Math.Ceiling(union.Right) - Math.Floor(union.Left), Math.Ceiling(union.Bottom) - Math.Floor(union.Top));
         Rect Local(Rect screen) => new((screen.X - host.X) / dpi.DpiScaleX, (screen.Y - host.Y) / dpi.DpiScaleY,
@@ -2231,7 +2233,11 @@ public partial class MainWindow : Window
         NotchViewport.AnimateBounds(null);
         NotchViewport.VisibleBounds = from;
         SetHostBounds(host); // Ukuran buffer/jendela ditetapkan sekali sebelum transisi.
-        ClipHitArea(null); // Selama morph seluruh panggung boleh tampil; dipersempit lagi di SettleMorph.
+        // Selama morph area klik = gabungan bentuk lama dan tujuan (+ ruang pantulan), bukan seluruh panggung:
+        // mouse yang hanya dekat notch tidak boleh dianggap hover (notch terbuka sendiri / kedip buka-tutup).
+        var hit = Rect.Union(from, target);
+        if (growing) hit = new Rect(hit.X - pad.X, hit.Y, hit.Width + 2 * pad.X, hit.Height + pad.Y);
+        ClipHitArea(hit);
         ConfigurePanelLayout(target);
         var contentShift = (oldContentCenter - targetScreen.X - target.Width * dpi.DpiScaleX / 2) / dpi.DpiScaleX;
         ShellShift.BeginAnimation(TranslateTransform.XProperty, null); ShellShift.X = 0;
@@ -3082,7 +3088,8 @@ internal static class DesktopNative
     internal static void SetHitRegion(IntPtr window, Int32Rect? pixels)
     {
         var region = pixels is { } r ? CreateRectRgn(r.X, r.Y, r.X + r.Width, r.Y + r.Height) : IntPtr.Zero;
-        if (SetWindowRgn(window, region, true) == 0 && region != IntPtr.Zero) DeleteObject(region); // Berhasil = milik Windows.
+        // redraw=false: isi tidak berubah; menggambar ulang di GPU lemah sempat memunculkan frame kosong (kedip).
+        if (SetWindowRgn(window, region, false) == 0 && region != IntPtr.Zero) DeleteObject(region); // Berhasil = milik Windows.
     }
 
     [StructLayout(LayoutKind.Sequential)]
