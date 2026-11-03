@@ -17,6 +17,7 @@ public partial class MainWindow
         var layout = new SkyLayout(times, sky.Width, sky.Height);
         var accent = (Brush)FindResource("NotchAccent");
         var dim = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)); dim.Freeze();
+        var sunBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xD5, 0x6B)); sunBrush.Freeze();
 
         // Cakrawala, busur siang (tipis putus-putus), lalu bagian yang sudah dilewati matahari (warna aksen).
         sky.Children.Add(new Line { X1 = 0, X2 = sky.Width, Y1 = layout.Horizon, Y2 = layout.Horizon, Stroke = dim, StrokeThickness = 1 });
@@ -33,6 +34,16 @@ public partial class MainWindow
             var marker = new Ellipse { Width = isNext ? 9 : 6, Height = isNext ? 9 : 6, Fill = past ? accent : Brushes.Black,
                 Stroke = isNext || past ? accent : Brushes.White, StrokeThickness = isNext ? 2 : 1.2, Opacity = past && !isNext ? 0.6 : 1 };
             Place(marker, x - marker.Width / 2, y - marker.Height / 2);
+            // Terbit dan Maghrib: matahari setengah di cakrawala (terbit/terbenam), titik biasa hanya bila jadi berikutnya.
+            if (time == times[1] || time == times[4])
+            {
+                // Penanda tetap (bukan status), jadi selalu warna penuh: setengah lingkaran + tiga sinar.
+                sky.Children.Add(new Path { Fill = sunBrush, Stroke = sunBrush, StrokeThickness = 1.4, IsHitTestVisible = false,
+                    StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
+                    Data = Geometry.Parse(FormattableString.Invariant(
+                        $"M{x - 7},{y} A7,7 0 0 1 {x + 7},{y} Z M{x},{y - 9.5} L{x},{y - 12.5} M{x - 7.4},{y - 6.8} L{x - 9.5},{y - 8.9} M{x + 7.4},{y - 6.8} L{x + 9.5},{y - 8.9}")) });
+                if (!isNext) marker.Visibility = Visibility.Collapsed;
+            }
             // Semua label sejajar di bawah cakrawala seperti sumbu waktu (posisi konsisten, UI/UX Pro Max);
             // titik di busur (Dzuhur, Ashar) disambung ke labelnya dengan garis tipis.
             if (y < layout.Horizon - 1)
@@ -55,7 +66,7 @@ public partial class MainWindow
         {
             var glow = new Ellipse { Width = 22, Height = 22, IsHitTestVisible = false,
                 Fill = new RadialGradientBrush(Color.FromArgb(0x90, 0xFF, 0xD5, 0x6B), Color.FromArgb(0, 0xFF, 0xD5, 0x6B)) };
-            var sun = new Ellipse { Width = 11, Height = 11, Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xD5, 0x6B)), IsHitTestVisible = false };
+            var sun = new Ellipse { Width = 11, Height = 11, Fill = sunBrush, IsHitTestVisible = false };
             sky.Children.Add(Place(glow, sx - 11, sy - 11));
             sky.Children.Add(Place(sun, sx - 5.5, sy - 5.5));
         }
