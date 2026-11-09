@@ -475,7 +475,7 @@ impl Gfx {
                 card_label: format(&dwrite, 9.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
                 card_name: format(&dwrite, 13.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
                 card_time: format(&dwrite, 22.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
-                card_note: format(&dwrite, 11.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, true, false)?,
+                card_note: format(&dwrite, 11.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, true)?,
             };
             let icons = Icons {
                 logo: logo_geometry(&factory)?,
@@ -1127,7 +1127,7 @@ impl Gfx {
         self.text(p.next_time.name, &self.formats.card_name, rect(left, ct + 28.0, left + name_w + 2.0, ct + 56.0), &ink);
         self.text(&time, &self.formats.card_time, rect(left + name_w + gap, ct + 26.0, left + name_w + gap + time_w + 2.0, ct + 56.0), &ink);
         rt.SetTransform(&base);
-        self.text(&format!("{} · {}", p.countdown, p.zone), &self.formats.card_note, rect(cl + 12.0, ct + 58.0, cr - 6.0, ct + 76.0), &ink);
+        // Hitung mundur panjang ("7 jam 34 menit lagi · WIB") turun ke baris kedua, tidak dipotong.
 
         // Lintasan matahari.
         let sky = crate::prayer::Sky { times: &p.times, width: SKY_W, height: SKY_H };
