@@ -20,8 +20,8 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
     ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
     D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
-    D2D1_COMBINE_MODE_EXCLUDE, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LAYER_OPTIONS_NONE,
+    D2D1_CAP_STYLE_FLAT, D2D1_COMBINE_MODE_EXCLUDE, D2D1_DASH_STYLE_CUSTOM, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LAYER_OPTIONS_NONE,
     D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND, D2D1_ROUNDED_RECT,
     D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
     D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
@@ -29,7 +29,7 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
     DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
@@ -113,11 +113,26 @@ pub enum Hit {
     ClipRow(u64),
     ClipCopy(u64),
     ClipDelete(u64),
+    PrayerCity,
 }
 
 pub const PAGE_MUSIC: usize = 0;
 pub const PAGE_CLIPBOARD: usize = 1;
-pub const PAGE_COUNT: usize = 2;
+pub const PAGE_PRAYER: usize = 2;
+pub const PAGE_COUNT: usize = 3;
+
+/// Halaman jadwal salat (lihat prayer.rs).
+pub struct PrayerView<'a> {
+    pub city: &'a str,
+    pub zone: &'static str,
+    pub times: [crate::prayer::PrayerTime; 6],
+    /// Menit sejak tengah malam waktu kota.
+    pub now: f64,
+    /// Indeks waktu berikutnya hari ini (None = Subuh besok), waktunya, dan hitung mundur.
+    pub next: Option<usize>,
+    pub next_time: crate::prayer::PrayerTime,
+    pub countdown: &'a str,
+}
 
 pub struct ClipRow<'a> {
     pub id: u64,
@@ -165,7 +180,20 @@ pub struct View<'a> {
     pub page: usize,
     /// Halaman lama yang sedang bergeser keluar, arahnya (-1/1), dan progres 0..1.
     pub transition: Option<(usize, f32, f32)>,
+    pub prayer: PrayerView<'a>,
+    /// Pengingat singkat di notch kecil (mis. waktu salat), menggantikan jam/lirik.
+    pub notice: Option<&'a str>,
 }
+
+// Halaman salat: judul + kota 24 | kartu berikutnya 128 | 6 | lintasan matahari 388 x 86.
+const PRAYER_CITY: (f32, f32) = (PAGE_RIGHT - 150.0, PAGE_RIGHT);
+const PRAYER_HEADER_Y: f32 = 19.0;
+const PRAYER_CARD: (f32, f32, f32, f32) = (PAGE_LEFT, 38.0, PAGE_LEFT + 128.0, 128.0);
+const SKY_LEFT: f32 = PAGE_LEFT + 134.0;
+const SKY_TOP: f32 = 40.0;
+const SKY_W: f32 = PAGE_RIGHT - SKY_LEFT;
+const SKY_H: f32 = 86.0;
+const SUN: u32 = 0xFFD56B;
 
 // Tata letak panel terbuka (koordinat jendela, DIP). Deck 594 x 142 dimulai di (27, 8):
 // kolom panah 28 | 8 | halaman 522 | 8 | panah 28. Halaman musik: pemutar 292 | 18 | lirik 212.
@@ -258,6 +286,10 @@ pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip
     if page == PAGE_CLIPBOARD {
         return clip_hit(clip, x, y);
     }
+    if page == PAGE_PRAYER {
+        let (l, r) = PRAYER_CITY;
+        return if x >= l && x <= r && (y - PRAYER_HEADER_Y).abs() <= 11.0 { Hit::PrayerCity } else { Hit::None };
+    }
     if near(x, y, PIN_X, ROW_BUTTONS_Y, 11.0) {
         return Hit::Pin;
     }
@@ -337,6 +369,12 @@ struct Formats {
     row_time: IDWriteTextFormat,
     note_center: IDWriteTextFormat,
     status: IDWriteTextFormat,
+    sky_name: IDWriteTextFormat,
+    sky_time: IDWriteTextFormat,
+    card_label: IDWriteTextFormat,
+    card_name: IDWriteTextFormat,
+    card_time: IDWriteTextFormat,
+    card_note: IDWriteTextFormat,
 }
 
 /// Ikon dari MainWindow.xaml, semuanya di bidang 20 x 20.
@@ -356,6 +394,7 @@ struct Icons {
     arrow_right: ID2D1PathGeometry,
     copy: ID2D1PathGeometry,
     close: ID2D1PathGeometry,
+    chevron: ID2D1PathGeometry,
 }
 
 /// Perangkat GPU + rantai tampilan DirectComposition. Dibuat ulang utuh bila GPU di-reset.
@@ -379,6 +418,9 @@ pub struct Gfx {
     formats: Formats,
     icons: Icons,
     round: ID2D1StrokeStyle,
+    /// Garis putus-putus busur siang dan garis titik penghubung label (halaman salat).
+    dash: ID2D1StrokeStyle,
+    dot: ID2D1StrokeStyle,
     width: i32,
     height: i32,
     dpi: f32,
@@ -419,6 +461,12 @@ impl Gfx {
                 row_time: format(&dwrite, 9.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
                 note_center: format(&dwrite, 11.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
                 status: format(&dwrite, 10.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER, true, false)?,
+                sky_name: format(&dwrite, 9.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
+                sky_time: format(&dwrite, 12.0, semi, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
+                card_label: format(&dwrite, 9.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
+                card_name: format(&dwrite, 13.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
+                card_time: format(&dwrite, 22.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
+                card_note: format(&dwrite, 11.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, true, false)?,
             };
             let icons = Icons {
                 logo: logo_geometry(&factory)?,
@@ -440,6 +488,7 @@ impl Gfx {
                 arrow_right: path(&factory, "M7,4 L13,10 L7,16", false)?,
                 copy: path(&factory, "M7,3 H16 V13 H7 Z M4,7 H3 V17 H12 V16", false)?,
                 close: path(&factory, "M5,5 L15,15 M15,5 L5,15", false)?,
+                chevron: path(&factory, "M5,8 L10,13 L15,8", false)?,
             };
             let round = factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
@@ -453,6 +502,22 @@ impl Gfx {
                 },
                 None,
             )?;
+            let dashed = |dashes: &[f32]| {
+                factory.CreateStrokeStyle(
+                    &D2D1_STROKE_STYLE_PROPERTIES {
+                        startCap: D2D1_CAP_STYLE_FLAT,
+                        endCap: D2D1_CAP_STYLE_FLAT,
+                        dashCap: D2D1_CAP_STYLE_FLAT,
+                        lineJoin: D2D1_LINE_JOIN_ROUND,
+                        miterLimit: 10.0,
+                        dashStyle: D2D1_DASH_STYLE_CUSTOM,
+                        dashOffset: 0.0,
+                    },
+                    Some(dashes),
+                )
+            };
+            let dash = dashed(&[1.3, 2.0])?;
+            let dot = dashed(&[1.5, 2.5])?;
             let gpu = create_gpu(&factory)?;
             let target = gpu.context.cast()?;
             Ok(Gfx {
@@ -464,6 +529,8 @@ impl Gfx {
                 formats,
                 icons,
                 round,
+                dash,
+                dot,
                 width: 0,
                 height: 0,
                 dpi: 96.0,
@@ -616,9 +683,14 @@ impl Gfx {
         rt.PopLayer();
 
         if compact_alpha > 0.0 {
-            match v.lyric.compact {
-                Some(line) => self.paint_compact_lyric(v, line, x0, w, h, compact_alpha)?,
-                None => self.paint_compact(v, compact_alpha)?,
+            match (v.notice, v.lyric.compact) {
+                (Some(notice), _) => {
+                    let cy = h / 2.0 - 1.0;
+                    let area = rect(x0 + COMPACT_INSET, cy - 12.0, x0 + w - COMPACT_INSET, cy + 12.0);
+                    self.text_fit(notice, &self.formats.compact_lyric, area, &self.brush(TEXT, compact_alpha)?, Matrix3x2::identity())?;
+                }
+                (None, Some(line)) => self.paint_compact_lyric(v, line, x0, w, h, compact_alpha)?,
+                (None, None) => self.paint_compact(v, compact_alpha)?,
             }
         }
         let alpha = ((v.t - 0.35) / 0.65).clamp(0.0, 1.0);
@@ -645,6 +717,8 @@ impl Gfx {
                 rt.SetTransform(&shifted);
                 if page == PAGE_CLIPBOARD {
                     self.paint_clipboard(v, page_alpha, shifted)?;
+                } else if page == PAGE_PRAYER {
+                    self.paint_prayer(v, page_alpha)?;
                 } else {
                     self.paint_music(v, page_alpha, elapsed, duration, fraction, shifted)?;
                 }
@@ -999,6 +1073,126 @@ impl Gfx {
         }
         self.text(clip.status, &self.formats.status, rect(PAGE_LEFT + 12.0, CLIP_LIST_BOTTOM, PAGE_RIGHT - 12.0, 142.0), &self.brush(TEXT, alpha * 0.8)?);
         Ok(())
+    }
+
+    /// Halaman salat: kartu waktu berikutnya + lintasan matahari (busur siang, matahari/bulan saat ini,
+    /// label sejajar di bawah cakrawala seperti sumbu waktu).
+    unsafe fn paint_prayer(&self, v: &View, alpha: f32) -> Result<()> {
+        let rt = &self.target;
+        let theme = v.theme;
+        let p = &v.prayer;
+        let white = self.brush(TEXT, alpha)?;
+        let accent = self.brush(theme.accent, alpha)?;
+        let dim = self.brush(TEXT, alpha * 0.33)?;
+        let sun = self.brush(SUN, alpha)?;
+
+        self.text("Jadwal Salat", &self.formats.clip_title, rect(PAGE_LEFT, 8.0, PAGE_LEFT + 200.0, 30.0), &white);
+        // Pilihan kota: pil seperti tombol tema, klik membuka daftar kota.
+        let (l, r) = PRAYER_CITY;
+        let pill = D2D1_ROUNDED_RECT { rect: rect(l, PRAYER_HEADER_Y - 11.0, r, PRAYER_HEADER_Y + 11.0), radiusX: 7.0, radiusY: 7.0 };
+        let hover = v.hover == Hit::PrayerCity;
+        rt.FillRoundedRectangle(&pill, &self.brush(if hover { theme.accent } else { theme.soft }, alpha)?);
+        let ink = self.brush(theme.ink, alpha)?;
+        self.text(p.city, &self.formats.search, rect(l + 10.0, pill.rect.top, r - 24.0, pill.rect.bottom), &ink);
+        self.stroke_icon(&self.icons.chevron, r - 13.0, PRAYER_HEADER_Y, 12.0, 1.8, &ink, Matrix3x2::identity());
+
+        // Kartu waktu berikutnya.
+        let (cl, ct, cr, cb) = PRAYER_CARD;
+        rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rect(cl, ct, cr, cb), radiusX: 12.0, radiusY: 12.0 }, &accent);
+        let label = if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" };
+        self.text(label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 8.0, ct + 26.0), &self.brush(theme.ink, alpha * 0.7)?);
+        let name_w = self.measure(p.next_time.name, &self.formats.card_name);
+        self.text(p.next_time.name, &self.formats.card_name, rect(cl + 12.0, ct + 28.0, cl + 14.0 + name_w, ct + 56.0), &ink);
+        self.text(&p.next_time.label(), &self.formats.card_time, rect(cl + 18.0 + name_w, ct + 26.0, cr - 4.0, ct + 56.0), &ink);
+        self.text(&format!("{} · {}", p.countdown, p.zone), &self.formats.card_note, rect(cl + 12.0, ct + 58.0, cr - 6.0, ct + 76.0), &ink);
+
+        // Lintasan matahari.
+        let sky = crate::prayer::Sky { times: &p.times, width: SKY_W, height: SKY_H };
+        let at = |t: f64| (SKY_LEFT + sky.x(t), SKY_TOP + sky.y(t));
+        let horizon = SKY_TOP + sky.horizon();
+        rt.DrawLine(pt(SKY_LEFT, horizon), pt(SKY_LEFT + SKY_W, horizon), &dim, 1.0, None::<&ID2D1StrokeStyle>);
+        let (rise, set) = (p.times[1].minutes, p.times[4].minutes);
+        rt.DrawGeometry(&self.sky_arc(&at, rise, set)?, &dim, 1.5, &self.dash);
+        if p.now > rise {
+            rt.DrawGeometry(&self.sky_arc(&at, rise, p.now.min(set))?, &accent, 2.0, &self.round);
+        }
+        for (i, time) in p.times.iter().enumerate() {
+            let (x, y) = at(time.minutes);
+            let is_next = p.next == Some(i);
+            let past = time.minutes <= p.now;
+            let fade = if past && !is_next { 0.5 } else { 1.0 };
+            if y < horizon - 1.0 {
+                rt.DrawLine(pt(x, y + 5.0), pt(x, horizon), &dim, 1.0, &self.dot);
+            }
+            if i == 1 || i == 4 {
+                // Terbit/Maghrib: matahari setengah di cakrawala dengan tiga sinar.
+                rt.FillGeometry(&self.half_sun(x, horizon)?, &sun, None::<&ID2D1Brush>);
+                for (dx, dy, ex, ey) in [(0.0, -9.5, 0.0, -12.5), (-7.4, -6.8, -9.5, -8.9), (7.4, -6.8, 9.5, -8.9)] {
+                    rt.DrawLine(pt(x + dx, horizon + dy), pt(x + ex, horizon + ey), &sun, 1.4, &self.round);
+                }
+            }
+            if !(i == 1 || i == 4) || is_next {
+                let r = if is_next { 4.5 } else { 3.0 };
+                let fill = if past { theme.accent } else { 0x000000 };
+                rt.FillEllipse(&ellipse(x, y, r), &self.brush(fill, alpha * fade)?);
+                let ring = if is_next || past { theme.accent } else { TEXT };
+                rt.DrawEllipse(&ellipse(x, y, r), &self.brush(ring, alpha * fade)?, if is_next { 2.0 } else { 1.2 }, None::<&ID2D1StrokeStyle>);
+            }
+            let color = if is_next { theme.accent } else { TEXT };
+            self.text(time.name, &self.formats.sky_name, rect(x - 26.0, horizon + 4.0, x + 26.0, horizon + 15.0), &self.brush(color, alpha * fade * if is_next { 1.0 } else { 0.8 })?);
+            self.text(&time.label(), &self.formats.sky_time, rect(x - 26.0, horizon + 14.0, x + 26.0, horizon + 30.0), &self.brush(color, alpha * fade)?);
+        }
+        // Siang: matahari bercahaya di busur. Malam: bulan sabit di atas cakrawala.
+        let (sx, sy) = at(p.now);
+        if sky.is_day(p.now) {
+            rt.FillEllipse(&ellipse(sx, sy, 10.0), &self.brush(SUN, alpha * 0.18)?);
+            rt.FillEllipse(&ellipse(sx, sy, 7.5), &self.brush(SUN, alpha * 0.3)?);
+            rt.FillEllipse(&ellipse(sx, sy, 5.5), &sun);
+        } else {
+            rt.FillGeometry(&self.crescent(sx, horizon - 12.0)?, &self.brush(0xE8ECF4, alpha)?, None::<&ID2D1Brush>);
+        }
+        Ok(())
+    }
+
+    unsafe fn sky_arc(&self, at: &dyn Fn(f64) -> (f32, f32), from: f64, to: f64) -> Result<ID2D1PathGeometry> {
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        let (x, y) = at(from);
+        sink.BeginFigure(pt(x, y), D2D1_FIGURE_BEGIN_HOLLOW);
+        for i in 1..=48 {
+            let (x, y) = at(from + (to - from) * i as f64 / 48.0);
+            sink.AddLine(pt(x, y));
+        }
+        sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        sink.Close()?;
+        Ok(geometry)
+    }
+
+    unsafe fn half_sun(&self, x: f32, y: f32) -> Result<ID2D1PathGeometry> {
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        sink.BeginFigure(pt(x - 7.0, y), D2D1_FIGURE_BEGIN_FILLED);
+        sink.AddArc(&D2D1_ARC_SEGMENT {
+            point: pt(x + 7.0, y),
+            size: D2D_SIZE_F { width: 7.0, height: 7.0 },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: D2D1_ARC_SIZE_SMALL,
+        });
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink.Close()?;
+        Ok(geometry)
+    }
+
+    /// Bulan sabit: lingkaran dikurangi lingkaran yang digeser ke kanan atas.
+    unsafe fn crescent(&self, cx: f32, cy: f32) -> Result<ID2D1PathGeometry> {
+        let outer = self.factory.CreateEllipseGeometry(&ellipse(cx, cy, 6.0))?;
+        let inner = self.factory.CreateEllipseGeometry(&ellipse(cx + 3.0, cy - 2.0, 5.5))?;
+        let geometry = self.factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        outer.CombineWithGeometry(&inner, D2D1_COMBINE_MODE_EXCLUDE, None, 0.05, &sink)?;
+        sink.Close()?;
+        Ok(geometry)
     }
 
     /// Teks di tengah area; diperkecil seragam bila tidak muat (seperti Viewbox StretchDirection=DownOnly).

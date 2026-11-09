@@ -24,6 +24,10 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
   jenis lirik (Otomatis/Lirik asli/Romaji) + Cari ulang, daftar "Lirik yang dipakai", koreksi waktu ±0,5 detik,
   bagian "Lainnya" (judul/artis untuk pencarian, simpan `.lrc`/`.txt`, muat file, Lirik tersimpan…), dan teks lirik lengkap.
 
+**Jadwal Salat** (halaman ketiga)
+- Enam waktu salat hari ini untuk 49 kota (pil kota di kanan atas), dihitung offline dengan kriteria Kemenag RI; selisih dengan jadwal resmi maksimal 1 menit.
+- Kartu waktu berikutnya dengan hitung mundur, lintasan matahari (busur siang, matahari/bulan saat ini), dan pengingat di notch kecil saat masuk waktu salat.
+
 **Clipboard** (halaman kedua, panah kiri/kanan)
 - Riwayat teks yang disalin selama aplikasi berjalan, maksimal 64 item; tidak pernah disimpan ke disk.
 - Pencarian, salin ulang, hapus, Jeda/Lanjut, dan Reset. Isi yang ditandai pengelola sandi tidak dicatat.
@@ -51,6 +55,7 @@ GitHub Actions (`.github/workflows/build.yml`) juga membangun exe di setiap push
 | `src/draw.rs` | Gambar notch dengan Direct2D/DirectWrite ke swap chain DirectComposition, cover dengan WIC |
 | `src/media.rs` | Windows Media Session: info lagu dan kontrol |
 | `src/net.rs` | Kecepatan internet |
+| `src/prayer.rs` | Jadwal salat, daftar kota, hitung mundur, tata letak lintasan matahari |
 
 ## Lisensi
 

@@ -1,7 +1,8 @@
 // NotchRust: widget notch di atas layar Windows, port Rust dari NotchMusic (WPF).
 // Saat diam: logo, jam, kecepatan internet (atau baris lirik saat lagu diputar).
 // Saat di-hover: panel musik + lirik, dan halaman riwayat clipboard.
-#![windows_subsystem = "windows"]
+// Tanpa jendela konsol saat jalan; saat `cargo test` tetap konsol agar hasil tes terlihat.
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod clipboard;
 mod draw;
@@ -10,6 +11,7 @@ mod lyrics;
 mod lyrics_window;
 mod media;
 mod net;
+mod prayer;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -41,7 +43,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use draw::{ClipHit, ClipRow, ClipView, Gfx, Hit, LyricView, View, COMPACT_H, COMPACT_W, EXPANDED_H, EXPANDED_W, THEMES};
+use draw::{ClipHit, ClipRow, ClipView, Gfx, Hit, LyricView, PrayerView, View, COMPACT_H, COMPACT_W, EXPANDED_H, EXPANDED_W, THEMES};
 use media::{Command, MediaState};
 use net::Speed;
 
@@ -50,6 +52,10 @@ const WM_NET: u32 = WM_APP + 2;
 const WM_TRAY: u32 = WM_APP + 3;
 const WM_LYRICS: u32 = WM_APP + 4;
 const WM_LYRIC_CHOICES: u32 = WM_APP + 5;
+const WM_CITY_MENU: u32 = WM_APP + 6;
+/// Id menu kota jadwal salat: MENU_CITY + indeks kota.
+const MENU_CITY: usize = 1000;
+const NOTICE_SECONDS: f32 = 5.0;
 // Tidak tersedia di modul WindowsAndMessaging crate windows.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_CLIPBOARDUPDATE: u32 = 0x031D;
@@ -96,6 +102,12 @@ struct App {
     animating: bool,
     /// Waktu langkah animasi terakhir.
     stepped: Instant,
+    /// Kota jadwal salat (indeks prayer::CITIES).
+    prayer_city: usize,
+    /// Menit terakhir yang sudah dicek untuk pengingat salat.
+    prayer_minute: i64,
+    /// Pengingat singkat di notch kecil dan kapan mulai tampil.
+    notice: Option<(String, Instant)>,
     from: f32,
     target: f32,
     started: Instant,
@@ -218,6 +230,9 @@ fn main() -> Result<()> {
             t: 0.0,
             animating: false,
             stepped: Instant::now(),
+            prayer_city: read_setting("PrayerCity").map(|v| v as usize).filter(|&i| i < prayer::CITIES.len()).unwrap_or(prayer::JAKARTA),
+            prayer_minute: -1,
+            notice: None,
             from: 0.0,
             target: 0.0,
             started: Instant::now(),
@@ -336,14 +351,16 @@ impl App {
         let now = now_ticks();
         let lines = self.lyric_lines(&media, now);
 
-        // Notch kecil melebar mengikuti panjang baris lirik, seperti MusicMinWidth + CompactChrome.
+        // Notch kecil melebar mengikuti panjang baris lirik (MusicMinWidth + CompactChrome) atau pengingat.
         let compact_line = lines.compact.as_deref();
-        self.compact_target = match compact_line {
-            Some(line) => (
+        let notice = self.notice.as_ref().map(|(text, _)| text.clone());
+        self.compact_target = match (&notice, compact_line) {
+            (Some(text), _) => ((self.gfx.compact_lyric_width(text) + 32.0 * 2.0 + 6.0).clamp(COMPACT_W, EXPANDED_W), draw::MUSIC_H),
+            (None, Some(line)) => (
                 (self.gfx.compact_lyric_width(line) + draw::COMPACT_CHROME).clamp(COMPACT_W, EXPANDED_W),
                 draw::MUSIC_H,
             ),
-            None => (COMPACT_W, COMPACT_H),
+            (None, None) => (COMPACT_W, COMPACT_H),
         };
         if self.compact != self.compact_target {
             self.start_animation_timer();
@@ -361,6 +378,11 @@ impl App {
             let p = (started.elapsed().as_secs_f32() / PAGE_SECONDS).min(1.0);
             (from, direction, 1.0 - (1.0 - p).powi(3))
         });
+        let city = &prayer::CITIES[self.prayer_city];
+        let (day, minute_now) = city.now();
+        let today = prayer::times(day, city);
+        let (next_index, next_time, left) = prayer::next(&today, prayer::times(day + 1, city)[0], minute_now);
+        let countdown = prayer::countdown(left);
         let elapsed_secs = self.started_at.elapsed().as_secs_f32();
         let eq = std::array::from_fn(|i| {
             let speed = [5.1, 6.7, 4.3, 7.9, 5.9][i];
@@ -398,6 +420,16 @@ impl App {
             },
             page: self.page,
             transition,
+            prayer: PrayerView {
+                city: city.name,
+                zone: city.zone(),
+                times: today,
+                now: minute_now,
+                next: next_index,
+                next_time,
+                countdown: &countdown,
+            },
+            notice: notice.as_deref(),
         };
         let _ = self.gfx.present(self.hwnd, self.origin, &view, self.dpi);
     }
@@ -790,6 +822,27 @@ impl App {
         self.render();
     }
 
+    /// Tiap detik: tutup pengingat setelah beberapa detik, dan tampilkan pengingat saat masuk waktu salat.
+    fn tick(&mut self) {
+        if self.notice.as_ref().is_some_and(|(_, shown)| shown.elapsed().as_secs_f32() >= NOTICE_SECONDS) {
+            self.notice = None;
+        }
+        let city = &prayer::CITIES[self.prayer_city];
+        let (day, now) = city.now();
+        let minute = day * 1440 + now.floor() as i64;
+        if minute == self.prayer_minute {
+            return;
+        }
+        let first = self.prayer_minute < 0;
+        self.prayer_minute = minute;
+        if first {
+            return; // Saat aplikasi baru jalan, jangan mengumumkan waktu yang sedang berlangsung.
+        }
+        if let Some(due) = prayer::times(day, city).iter().find(|p| p.prays && p.minutes.floor() as i64 == now.floor() as i64) {
+            self.notice = Some((format!("Waktu {} · {} {}", due.name, due.label(), city.zone()), Instant::now()));
+        }
+    }
+
     fn navigate_page(&mut self, direction: i32) {
         let count = draw::PAGE_COUNT as i32;
         let from = self.page;
@@ -933,6 +986,13 @@ impl App {
         let command = match hit {
             Hit::Lyrics => {
                 self.open_lyrics_window();
+                return;
+            }
+            Hit::PrayerCity => {
+                // Menu kota punya loop pesan sendiri: dibuka setelah state App dilepas.
+                unsafe {
+                    let _ = PostMessageW(self.hwnd, WM_CITY_MENU, WPARAM(0), LPARAM(0));
+                }
                 return;
             }
             Hit::PageLeft | Hit::PageRight => {
@@ -1129,8 +1189,16 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                         let _ = KillTimer(hwnd, TIMER_CLIPBOARD_RETRY);
                         app.clipboard_changed();
                     }),
+                    TIMER_TICK => with_app(|app| {
+                        app.tick();
+                        app.render();
+                    }),
                     _ => with_app(|app| app.render()),
                 };
+                LRESULT(0)
+            }
+            WM_CITY_MENU => {
+                show_city_menu(hwnd);
                 LRESULT(0)
             }
             WM_NET => {
@@ -1227,6 +1295,30 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
         }
+    }
+}
+
+/// Daftar kota jadwal salat, dibuka dari pil kota di halaman salat.
+unsafe fn show_city_menu(hwnd: HWND) {
+    let Ok(menu) = CreatePopupMenu() else { return };
+    let current = with_app(|app| app.prayer_city).unwrap_or(prayer::JAKARTA);
+    for (i, city) in prayer::CITIES.iter().enumerate() {
+        let name: Vec<u16> = format!("{} ({})", city.name, city.zone()).encode_utf16().chain(Some(0)).collect();
+        let flags = MF_STRING | if i == current { MF_CHECKED } else { MF_UNCHECKED } | if i > 0 && i % 25 == 0 { MF_MENUBARBREAK } else { MF_STRING };
+        let _ = AppendMenuW(menu, flags, MENU_CITY + i, PCWSTR(name.as_ptr()));
+    }
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+    let _ = SetForegroundWindow(hwnd);
+    let chosen: BOOL = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd, None);
+    let _ = DestroyMenu(menu);
+    let index = (chosen.0 as usize).wrapping_sub(MENU_CITY);
+    if index < prayer::CITIES.len() {
+        with_app(|app| {
+            app.prayer_city = index;
+            write_setting("PrayerCity", index as u32);
+            app.render();
+        });
     }
 }
 

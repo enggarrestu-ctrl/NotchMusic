@@ -2,3 +2,6 @@
 /dist/
 # Build C# lama yang ikut tersalin ke folder ini; bukan bagian dari proyek Rust.
 /NotchMusic-publish/
+
+# Indeks Visual Studio (Open Folder)
+.vs/
