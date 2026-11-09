@@ -40,8 +40,7 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 
 **Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
 
-Belum di-port: romaji dari Better Lyrics/Unison, editor tema kustom,
-kunci game. Halaman peluncur game sengaja tidak di-port.
+Belum di-port: halaman peluncur game, editor tema kustom, dan romaji dari Better Lyrics/Unison.
 
 ## Build
 
