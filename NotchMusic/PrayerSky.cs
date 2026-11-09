@@ -75,7 +75,7 @@ public partial class MainWindow
             var moon = new Path { Fill = new SolidColorBrush(Color.FromRgb(0xE8, 0xEC, 0xF4)), IsHitTestVisible = false,
                 Data = new CombinedGeometry(GeometryCombineMode.Exclude, new EllipseGeometry(new Point(6, 6), 6, 6),
                     new EllipseGeometry(new Point(9, 4), 5.5, 5.5)) };
-            sky.Children.Add(Place(moon, sx - 6, layout.Horizon - 18));
+            // Sabit berat ke kiri: geser +2 agar tampak tepat di atas posisinya, dan beri jarak dari titik cakrawala.
         }
         AutomationProperties.SetHelpText(sky, string.Join(", ", times.Select(x => $"{x.Name} {x.Time:HH.mm}")));
     }

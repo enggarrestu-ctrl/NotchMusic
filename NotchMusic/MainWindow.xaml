@@ -795,10 +795,13 @@
                                 AutomationProperties.Name="Waktu salat berikutnya">
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock x:Name="PrayerNextLabel" Text="BERIKUTNYA" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource NotchInk}" Opacity="0.7" />
-                                <TextBlock Foreground="{DynamicResource NotchInk}" TextTrimming="CharacterEllipsis">
-                                    <Run x:Name="PrayerNextName" Text="Isya" FontSize="13" FontWeight="SemiBold" />
-                                    <Run x:Name="PrayerNextTime" Text="19.01" FontSize="22" FontWeight="Bold" />
-                                </TextBlock>
+                                <!-- Nama panjang (Subuh/Maghrib): nama + jam diperkecil bersama, tidak dipotong "…". -->
+                                <Viewbox Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Left">
+                                    <TextBlock Foreground="{DynamicResource NotchInk}">
+                                        <Run x:Name="PrayerNextName" Text="Isya" FontSize="13" FontWeight="SemiBold" />
+                                        <Run x:Name="PrayerNextTime" Text="19.01" FontSize="22" FontWeight="Bold" />
+                                    </TextBlock>
+                                </Viewbox>
                                 <TextBlock x:Name="PrayerCountdown" Text="59 menit lagi" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{DynamicResource NotchInk}" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
