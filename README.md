@@ -24,7 +24,11 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
   jenis lirik (Otomatis/Lirik asli/Romaji) + Cari ulang, daftar "Lirik yang dipakai", koreksi waktu ±0,5 detik,
   bagian "Lainnya" (judul/artis untuk pencarian, simpan `.lrc`/`.txt`, muat file, Lirik tersimpan…), dan teks lirik lengkap.
 
-**Jadwal Salat** (halaman ketiga)
+**Game** (halaman ketiga)
+- Peluncur game sekali klik: tombol Scan menambah game Steam terakhir dimainkan, tombol + menambah shortcut/aplikasi sendiri (ikon diambil dari shortcut-nya).
+- Seret ikon untuk mengubah urutan (garis penanda tempat taruh), klik kanan untuk menghapus. Pertama kali jalan memakai daftar game NotchMusic.
+
+**Jadwal Salat** (halaman keempat)
 - Enam waktu salat hari ini untuk 49 kota (pil kota di kanan atas), dihitung offline dengan kriteria Kemenag RI; selisih dengan jadwal resmi maksimal 1 menit.
 - Kartu waktu berikutnya dengan hitung mundur, lintasan matahari (busur siang, matahari/bulan saat ini), dan pengingat di notch kecil saat masuk waktu salat.
 
@@ -40,7 +44,7 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 
 **Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
 
-Belum di-port: halaman peluncur game, editor tema kustom, dan romaji dari Better Lyrics/Unison.
+Belum di-port: editor tema kustom dan romaji dari Better Lyrics/Unison.
 
 ## Build
 

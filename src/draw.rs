@@ -5,9 +5,9 @@
 
 use std::mem::ManuallyDrop;
 
-use windows::core::{w, Interface, Result};
+use windows::core::{w, Interface, Result, PCWSTR};
 use windows::Foundation::Numerics::Matrix3x2;
-use windows::Win32::Foundation::{HMODULE, HWND, POINT};
+use windows::Win32::Foundation::{GENERIC_READ, HMODULE, HWND, POINT, SIZE};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN,
     D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED,
@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush, ID2D1DeviceContext, ID2D1Factory, ID2D1Factory1, ID2D1Geometry, ID2D1Image,
+    D2D1CreateFactory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap, ID2D1Brush, ID2D1DeviceContext, ID2D1Factory, ID2D1Factory1, ID2D1Geometry, ID2D1Image,
     ID2D1RenderTarget, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
     ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
@@ -52,11 +52,12 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapUsePremultipliedAlpha,
     WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
     WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY};
 use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER};
 
 use crate::media::MediaState;
@@ -115,12 +116,36 @@ pub enum Hit {
     ClipDelete(u64),
     PrayerCity,
     CityItem(usize),
+    GameScan,
+    GameTile(usize),
+    GameAdd,
 }
 
 pub const PAGE_MUSIC: usize = 0;
 pub const PAGE_CLIPBOARD: usize = 1;
-pub const PAGE_PRAYER: usize = 2;
-pub const PAGE_COUNT: usize = 3;
+pub const PAGE_GAME: usize = 2;
+pub const PAGE_PRAYER: usize = 3;
+pub const PAGE_COUNT: usize = 4;
+
+/// Halaman game: ikon game (kunci untuk cache ikon), kotak "+", status, dan penanda seret.
+pub struct GameView<'a> {
+    pub tiles: Vec<&'a crate::games::Game>,
+    pub status: &'a str,
+    /// Garis penanda tempat ikon akan ditaruh: (indeks kotak, di sisi kanan?).
+    pub drop: Option<(usize, bool)>,
+    /// Ikon yang sedang diseret (diredupkan).
+    pub dragging: Option<usize>,
+}
+
+// Halaman game: judul + Scan 22 | delapan kotak (7 game + "+") | status 16.
+const GAME_SCAN: (f32, f32) = (PAGE_RIGHT - 64.0, PAGE_RIGHT);
+const GAME_ROW_Y: f32 = 76.0;
+const GAME_CARD: f32 = 56.0;
+const GAME_ICON: f32 = 44.0;
+
+fn game_column(i: usize) -> f32 {
+    PAGE_LEFT + (i as f32 + 0.5) * (PAGE_RIGHT - PAGE_LEFT) / (crate::games::SLOTS + 1) as f32
+}
 
 /// Halaman jadwal salat (lihat prayer.rs).
 pub struct PrayerView<'a> {
@@ -191,6 +216,7 @@ pub struct View<'a> {
     /// Halaman lama yang sedang bergeser keluar, arahnya (-1/1), dan progres 0..1.
     pub transition: Option<(usize, f32, f32)>,
     pub prayer: PrayerView<'a>,
+    pub games: GameView<'a>,
     /// Pengingat singkat di notch kecil (mis. waktu salat), menggantikan jam/lirik.
     pub notice: Option<&'a str>,
     /// Panah halaman tampil hanya bila ada lebih dari satu halaman aktif.
@@ -316,7 +342,7 @@ pub struct ClipHit<'a> {
     pub scroll: f32,
 }
 
-pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip: &ClipHit, picker: Option<f32>, x: f32, y: f32) -> Hit {
+pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip: &ClipHit, picker: Option<f32>, games: usize, x: f32, y: f32) -> Hit {
     if t < 0.95 {
         return Hit::None;
     }
@@ -328,6 +354,13 @@ pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip
     }
     if page == PAGE_CLIPBOARD {
         return clip_hit(clip, x, y);
+    }
+    if page == PAGE_GAME {
+        let (l, r) = GAME_SCAN;
+        if x >= l && x <= r && (y - CLIP_HEADER_Y).abs() <= 10.0 {
+            return Hit::GameScan;
+        }
+        return game_tile_at(games, x, y).map_or(Hit::None, |i| if i == games { Hit::GameAdd } else { Hit::GameTile(i) });
     }
     if page == PAGE_PRAYER {
         let (l, r) = PRAYER_CITY;
@@ -368,6 +401,16 @@ pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip
     } else {
         Hit::None
     }
+}
+
+/// Kotak game di titik (x, y): 0..games = game, games = kotak "+". Lebar kolom penuh agar mudah dijatuhi saat diseret.
+pub fn game_tile_at(games: usize, x: f32, y: f32) -> Option<usize> {
+    if (y - GAME_ROW_Y).abs() > GAME_CARD / 2.0 + 6.0 || x < PAGE_LEFT || x > PAGE_RIGHT {
+        return None;
+    }
+    let width = (PAGE_RIGHT - PAGE_LEFT) / (crate::games::SLOTS + 1) as f32;
+    let i = ((x - PAGE_LEFT) / width) as usize;
+    (i <= games).then_some(i)
 }
 
 fn clip_hit(clip: &ClipHit, x: f32, y: f32) -> Hit {
@@ -478,6 +521,8 @@ pub struct Gfx {
     placed: (i32, i32, i32, i32),
     region: (i32, i32, i32, i32),
     cover: Option<(u64, ID2D1Bitmap)>,
+    /// Ikon game per kunci (None = gagal dimuat, pakai huruf awal).
+    game_icons: std::collections::HashMap<String, Option<ID2D1Bitmap>>,
     /// Batas slider terakhir yang digambar, untuk hit-test.
     pub track: (f32, f32),
 }
@@ -588,6 +633,7 @@ impl Gfx {
                 placed: (0, 0, 0, 0),
                 region: (0, 0, 0, 0),
                 cover: None,
+                game_icons: std::collections::HashMap::new(),
                 track: seek_track(30.0, 30.0),
             })
         }
@@ -616,6 +662,7 @@ impl Gfx {
                 self.gpu = create_gpu(&self.factory)?;
                 self.target = self.gpu.context.cast()?;
                 self.cover = None;
+                self.game_icons.clear(); // Bitmap terikat ke perangkat GPU lama.
                 self.frame(hwnd, view)?;
             }
             Ok(())
@@ -771,6 +818,8 @@ impl Gfx {
                     self.paint_clipboard(v, page_alpha, shifted)?;
                 } else if page == PAGE_PRAYER {
                     self.paint_prayer(v, page_alpha, shifted)?;
+                } else if page == PAGE_GAME {
+                    self.paint_games(v, page_alpha)?;
                 } else {
                     self.paint_music(v, page_alpha, elapsed, duration, fraction, shifted)?;
                 }
@@ -1260,6 +1309,111 @@ impl Gfx {
         Ok(geometry)
     }
 
+    /// Halaman game: ikon seperti shortcut Desktop (nama cukup di status), kotak "+" bergaris putus-putus,
+    /// tombol Scan di kanan atas, dan garis penanda saat ikon diseret.
+    unsafe fn paint_games(&mut self, v: &View, alpha: f32) -> Result<()> {
+        let rt = self.target.clone();
+        let theme = v.theme;
+        let g = &v.games;
+        let white = self.brush(TEXT, alpha)?;
+        self.text("Game", &self.formats.clip_title, rect(PAGE_LEFT, 8.0, PAGE_LEFT + 200.0, 30.0), &white);
+        let (l, r) = GAME_SCAN;
+        let hover = v.hover == Hit::GameScan;
+        let pill = D2D1_ROUNDED_RECT { rect: rect(l, CLIP_HEADER_Y - 10.0, r, CLIP_HEADER_Y + 10.0), radiusX: 10.0, radiusY: 10.0 };
+        rt.FillRoundedRectangle(&pill, &self.brush(if hover { theme.accent } else { theme.surface }, alpha)?);
+        self.text("Scan", &self.formats.chip, pill.rect, &self.brush(if hover { theme.ink } else { TEXT }, alpha)?);
+
+        let half = GAME_CARD / 2.0;
+        for (i, game) in g.tiles.iter().enumerate() {
+            let cx = game_column(i);
+            let card = D2D1_ROUNDED_RECT { rect: rect(cx - half, GAME_ROW_Y - half, cx + half, GAME_ROW_Y + half), radiusX: 10.0, radiusY: 10.0 };
+            let tile_alpha = if g.dragging == Some(i) { alpha * 0.4 } else { alpha };
+            if v.hover == Hit::GameTile(i) {
+                rt.FillRoundedRectangle(&card, &self.brush(TEXT, tile_alpha * 0.15)?);
+            }
+            let icon = rect(cx - GAME_ICON / 2.0, GAME_ROW_Y - GAME_ICON / 2.0, cx + GAME_ICON / 2.0, GAME_ROW_Y + GAME_ICON / 2.0);
+            match self.game_icon(game) {
+                Some(bitmap) => rt.DrawBitmap(&bitmap, Some(&icon), tile_alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None),
+                None => {
+                    // Tanpa ikon: kotak warna permukaan dengan huruf awal nama.
+                    let fallback = D2D1_ROUNDED_RECT { rect: icon, radiusX: 10.0, radiusY: 10.0 };
+                    rt.FillRoundedRectangle(&fallback, &self.brush(theme.surface, tile_alpha)?);
+                    let letter: String = game.name.chars().take(1).collect();
+                    self.text(&letter, &self.formats.card_time, icon, &self.brush(TEXT, tile_alpha)?);
+                }
+            }
+        }
+        // Kotak "+".
+        let add = g.tiles.len();
+        if add < crate::games::SLOTS + 1 {
+            let cx = game_column(add);
+            let hover = v.hover == Hit::GameAdd;
+            let box_ = D2D1_ROUNDED_RECT { rect: rect(cx - GAME_ICON / 2.0, GAME_ROW_Y - GAME_ICON / 2.0, cx + GAME_ICON / 2.0, GAME_ROW_Y + GAME_ICON / 2.0), radiusX: 10.0, radiusY: 10.0 };
+            let soft = self.brush(theme.soft, alpha * if hover { 1.0 } else { 0.8 })?;
+            rt.DrawRoundedRectangle(&box_, &soft, 1.5, &self.dash);
+            rt.DrawLine(pt(cx, GAME_ROW_Y - 9.0), pt(cx, GAME_ROW_Y + 9.0), &soft, 2.0, &self.round);
+            rt.DrawLine(pt(cx - 9.0, GAME_ROW_Y), pt(cx + 9.0, GAME_ROW_Y), &soft, 2.0, &self.round);
+        }
+        // Garis penanda tempat taruh.
+        if let Some((tile, right)) = g.drop {
+            let x = game_column(tile) + if right { half + 2.0 } else { -half - 2.0 };
+            let line = D2D1_ROUNDED_RECT { rect: rect(x - 1.5, GAME_ROW_Y - 20.0, x + 1.5, GAME_ROW_Y + 20.0), radiusX: 1.5, radiusY: 1.5 };
+            rt.FillRoundedRectangle(&line, &self.brush(theme.accent, alpha)?);
+        }
+        let status = match v.hover {
+            Hit::GameTile(i) if i < g.tiles.len() => g.tiles[i].name.as_str(),
+            _ => g.status,
+        };
+        self.text(status, &self.formats.status, rect(PAGE_LEFT + 12.0, 118.0, PAGE_RIGHT - 12.0, 138.0), &self.brush(TEXT, alpha * 0.8)?);
+        Ok(())
+    }
+
+    /// Ikon game dari cache; dimuat sekali per kunci.
+    unsafe fn game_icon(&mut self, game: &crate::games::Game) -> Option<ID2D1Bitmap> {
+        if let Some(icon) = self.game_icons.get(&game.key) {
+            return icon.clone();
+        }
+        let icon = match &game.icon {
+            crate::games::IconSource::Ico(path) | crate::games::IconSource::Image(path) => self.decode_file(path).ok(),
+            crate::games::IconSource::Shell(path) => self.shell_icon(path).ok(),
+            crate::games::IconSource::None => None,
+        };
+        self.game_icons.insert(game.key.clone(), icon.clone());
+        icon
+    }
+
+    /// .ico/.jpg: frame terkecil yang masih >= 64 px (tajam di skala 150%), atau yang terbesar.
+    unsafe fn decode_file(&self, path: &std::path::Path) -> Result<ID2D1Bitmap> {
+        let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
+        let decoder = self.wic.CreateDecoderFromFilename(PCWSTR(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)?;
+        let mut best: Option<(u32, u32)> = None; // (lebar, indeks)
+        for i in 0..decoder.GetFrameCount()? {
+            let (mut w, mut h) = (0, 0);
+            decoder.GetFrame(i)?.GetSize(&mut w, &mut h)?;
+            best = match best {
+                None => Some((w, i)),
+                Some((bw, _)) if (w >= 64 && (bw < 64 || w < bw)) || (bw < 64 && w > bw) => Some((w, i)),
+                keep => keep,
+            };
+        }
+        let frame = decoder.GetFrame(best.map_or(0, |b| b.1))?;
+        let converter = self.wic.CreateFormatConverter()?;
+        converter.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)?;
+        self.target.CreateBitmapFromWicBitmap(&converter, None)
+    }
+
+    /// Ikon persis seperti di Explorer (juga shortcut aplikasi Store/Xbox), 96 px.
+    unsafe fn shell_icon(&self, path: &str) -> Result<ID2D1Bitmap> {
+        let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)?;
+        let bitmap = factory.GetImage(SIZE { cx: 96, cy: 96 }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY)?;
+        let source = self.wic.CreateBitmapFromHBITMAP(bitmap, None, WICBitmapUsePremultipliedAlpha);
+        let _ = DeleteObject(bitmap);
+        let converter = self.wic.CreateFormatConverter()?;
+        converter.Initialize(&source?, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)?;
+        self.target.CreateBitmapFromWicBitmap(&converter, None)
+    }
+
     /// Daftar kota seperti dropdown NotchMusic: kotak warna Soft di bawah pil, teks Ink, baris disorot Accent,
     /// kota terpilih bertanda ✓; digulir dengan roda mouse.
     unsafe fn paint_city_picker(&self, v: &View, alpha: f32, scroll: f32) -> Result<()> {
@@ -1708,7 +1862,7 @@ mod tests {
         let media = MediaState { active: true, end: 2_000_000_000, ..Default::default() };
         let track = seek_track(30.0, 30.0);
         let clip = ClipHit { ids: &[], total: 0, scroll: 0.0 };
-        let hit = |t, x, y| hit_test(t, PAGE_MUSIC, &media, track, &clip, None, x, y);
+        let hit = |t, x, y| hit_test(t, PAGE_MUSIC, &media, track, &clip, None, 0, x, y);
         assert_eq!(hit(0.5, CONTROLS_X, ROW_BUTTONS_Y), Hit::None);
         assert_eq!(hit(1.0, CONTROLS_X, ROW_BUTTONS_Y), Hit::PlayPause);
         assert_eq!(hit(1.0, PREVIOUS_X, ROW_BUTTONS_Y), Hit::Previous);
@@ -1725,7 +1879,7 @@ mod tests {
         let right = clip_list_right(ids.len());
         let (_, copy_x, delete_x) = clip_columns(right);
         let y = CLIP_LIST_TOP + CLIP_ROW_H / 2.0;
-        let hit = |x, y| hit_test(1.0, PAGE_CLIPBOARD, &media, (0.0, 0.0), &clip, None, x, y);
+        let hit = |x, y| hit_test(1.0, PAGE_CLIPBOARD, &media, (0.0, 0.0), &clip, None, 0, x, y);
         assert_eq!(hit(copy_x, y), Hit::ClipCopy(11));
         assert_eq!(hit(delete_x, y), Hit::ClipDelete(11));
         assert_eq!(hit(PAGE_LEFT + 20.0, y), Hit::ClipRow(11));

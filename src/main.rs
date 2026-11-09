@@ -7,6 +7,7 @@
 mod clipboard;
 mod desktop;
 mod draw;
+mod games;
 mod http;
 mod lyrics;
 mod lyrics_window;
@@ -47,7 +48,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use draw::{ClipHit, ClipRow, ClipView, Gfx, Hit, LyricView, PrayerView, View, COMPACT_H, COMPACT_W, EXPANDED_H, EXPANDED_W, THEMES};
+use draw::{ClipHit, ClipRow, ClipView, GameView, Gfx, Hit, LyricView, PrayerView, View, COMPACT_H, COMPACT_W, EXPANDED_H, EXPANDED_W, THEMES};
 use media::{Command, MediaState};
 use net::Speed;
 
@@ -57,6 +58,8 @@ const WM_TRAY: u32 = WM_APP + 3;
 const WM_LYRICS: u32 = WM_APP + 4;
 const WM_LYRIC_CHOICES: u32 = WM_APP + 5;
 const WM_NOTICE: u32 = WM_APP + 7;
+const WM_ADD_GAME: u32 = WM_APP + 8;
+const GAME_HINT: &str = "Klik buka · seret untuk pindah · + tambah · klik kanan hapus";
 const NOTICE_SECONDS: f32 = 5.0;
 // Tidak tersedia di modul WindowsAndMessaging crate windows.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -82,6 +85,7 @@ const MENU_CLIPBOARD: usize = 7;
 const MENU_PRAYER: usize = 8;
 const MENU_SPEED: usize = 9;
 const MENU_RESET_POSITION: usize = 10;
+const MENU_GAMES: usize = 11;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: PCWSTR = w!("NotchRust");
@@ -118,6 +122,13 @@ struct App {
     notice: Option<(String, Instant)>,
     /// Daftar kota terbuka di halaman salat: posisi gulir.
     city_picker: Option<f32>,
+    /// Halaman game: kunci tersimpan, game lengkap, status, dan seret ikon (asal, penanda tempat taruh).
+    game_keys: Vec<String>,
+    games: Vec<games::Game>,
+    game_status: String,
+    games_enabled: bool,
+    game_press: Option<(usize, POINT)>,
+    game_drag: Option<(usize, Option<(usize, bool)>)>,
     /// Fitur yang bisa dimatikan dari menu klik kanan.
     clipboard_enabled: bool,
     prayer_enabled: bool,
@@ -266,6 +277,12 @@ fn main() -> Result<()> {
             prayer_minute: -1,
             notice: None,
             city_picker: None,
+            game_keys: games::load_keys(),
+            games: Vec::new(),
+            game_status: GAME_HINT.into(),
+            games_enabled: read_setting("GamesEnabled").map_or(true, |v| v != 0),
+            game_press: None,
+            game_drag: None,
             clipboard_enabled: read_setting("ClipboardEnabled").map_or(true, |v| v != 0),
             prayer_enabled: read_setting("PrayerEnabled").map_or(true, |v| v != 0),
             speed_enabled,
@@ -320,6 +337,7 @@ fn main() -> Result<()> {
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         with_app(|app| {
             app.layout();
+            app.reload_games();
             app.apply_features(); // Halaman tersimpan yang fiturnya mati kembali ke Musik; lalu gambar.
             app.add_tray();
             app.apply_pin();
@@ -480,6 +498,12 @@ impl App {
                 countdown: &countdown,
                 city_index: self.prayer_city,
                 picker: self.city_picker,
+            },
+            games: GameView {
+                tiles: self.games.iter().collect(),
+                status: &self.game_status,
+                drop: self.game_drag.and_then(|(_, drop)| drop),
+                dragging: self.game_drag.map(|(from, _)| from),
             },
             notice: notice.as_deref(),
             arrows: self.pages().len() > 1,
@@ -914,6 +938,9 @@ impl App {
         if self.clipboard_enabled {
             pages.push(draw::PAGE_CLIPBOARD);
         }
+        if self.games_enabled {
+            pages.push(draw::PAGE_GAME);
+        }
         if self.prayer_enabled {
             pages.push(draw::PAGE_PRAYER);
         }
@@ -1000,7 +1027,7 @@ impl App {
         let (ids, total) = self.clipboard_hit();
         let clip = ClipHit { ids: &ids, total, scroll: self.scroll };
         let page = if self.page_transition.is_some() { usize::MAX } else { self.page };
-        draw::hit_test(self.t, page, &self.media.lock().unwrap(), self.gfx.track, &clip, self.city_picker, x, y)
+        draw::hit_test(self.t, page, &self.media.lock().unwrap(), self.gfx.track, &clip, self.city_picker, self.games.len(), x, y)
     }
 
     fn scroll_by(&mut self, delta: f32) {
@@ -1061,10 +1088,23 @@ impl App {
 
     // ---- Memindah notch -------------------------------------------------------------------
 
-    /// Tombol kiri di area kosong (bukan tombol/slider) bisa jadi awal menyeret notch.
+    /// Tombol kiri di area kosong (bukan tombol/slider) bisa jadi awal menyeret notch;
+    /// di ikon game bisa jadi awal menyeret ikon untuk mengubah urutan.
     fn on_press(&mut self, lparam: LPARAM) {
         let (x, y) = self.to_dip(lparam);
-        if self.game_locked() || self.hit(x, y) != Hit::None {
+        if self.game_locked() {
+            return;
+        }
+        if let Hit::GameTile(i) = self.hit(x, y) {
+            let mut cursor = POINT::default();
+            unsafe {
+                let _ = GetCursorPos(&mut cursor);
+                SetCapture(self.hwnd);
+            }
+            self.game_press = Some((i, cursor));
+            return;
+        }
+        if self.hit(x, y) != Hit::None {
             return;
         }
         let mut cursor = POINT::default();
@@ -1156,8 +1196,110 @@ impl App {
         self.render();
     }
 
+    /// Seret ikon game: penanda di kiri/kanan kotak tujuan. Kembalikan true bila sedang menyeret ikon.
+    fn drag_game(&mut self, lparam: LPARAM) -> bool {
+        let Some((from, pressed)) = self.game_press else { return false };
+        if self.game_drag.is_none() {
+            let mut cursor = POINT::default();
+            unsafe {
+                let _ = GetCursorPos(&mut cursor);
+            }
+            let (dx, dy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+            if (cursor.x - pressed.x).abs() < dx && (cursor.y - pressed.y).abs() < dy {
+                return true;
+            }
+        }
+        let (x, y) = self.to_dip(lparam);
+        let count = self.games.len();
+        // Pindah ke kanan = ditaruh sesudah kotak tujuan; ke kiri = sebelum. Kotak "+" = paling belakang (kirinya).
+        let drop = draw::game_tile_at(count, x, y).and_then(|tile| {
+            let to = tile.min(count.saturating_sub(1));
+            (to != from).then_some((tile, from < to && tile < count))
+        });
+        self.game_drag = Some((from, drop));
+        self.render();
+        true
+    }
+
+    /// Lepas tombol setelah menyeret ikon: susun ulang dan simpan. Kembalikan true bila tadi menyeret.
+    fn finish_game_drag(&mut self) -> bool {
+        let pressed = self.game_press.take().is_some();
+        let Some((from, drop)) = self.game_drag.take() else {
+            if pressed {
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+            }
+            return false;
+        };
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        if let Some((tile, _)) = drop {
+            if games::reorder(&mut self.game_keys, from, tile) {
+                games::save_keys(&self.game_keys);
+                self.games = games::resolve(&self.game_keys);
+            }
+        }
+        self.render();
+        true
+    }
+
+    fn reload_games(&mut self) {
+        self.games = games::resolve(&self.game_keys);
+        // Game yang di-uninstall ikut keluar dari daftar tersimpan, agar slotnya bisa dipakai lagi.
+        if self.games.len() < self.game_keys.len() && !self.games.is_empty() {
+            self.game_keys = self.games.iter().map(|g| g.key.clone()).collect();
+            games::save_keys(&self.game_keys);
+        }
+    }
+
+    /// Isi slot kosong dengan game Steam yang terakhir dimainkan dan belum ada di daftar.
+    fn scan_steam(&mut self) {
+        let free = games::SLOTS.saturating_sub(self.game_keys.len());
+        if free == 0 {
+            self.game_status = "Daftar penuh. Klik kanan game untuk menghapusnya.".into();
+            return;
+        }
+        let recent = games::steam_games();
+        let added: Vec<String> = recent.iter().map(|g| g.id.clone()).filter(|id| !self.game_keys.contains(id)).take(free).collect();
+        self.game_status = if added.is_empty() {
+            if recent.is_empty() { "Steam atau game Steam tidak ditemukan." } else { "Semua game Steam terbaru sudah ada." }.into()
+        } else {
+            format!("{} game Steam ditambahkan.", added.len())
+        };
+        self.game_keys.extend(added);
+        games::save_keys(&self.game_keys);
+        self.reload_games();
+    }
+
+    fn add_game(&mut self, path: String) {
+        if self.game_keys.iter().any(|k| k.eq_ignore_ascii_case(&path)) {
+            self.game_status = "Game ini sudah ada di daftar.".into();
+        } else if self.game_keys.len() >= games::SLOTS {
+            self.game_status = "Daftar penuh. Klik kanan game untuk menghapusnya.".into();
+        } else {
+            let name = std::path::Path::new(&path).file_stem().map_or_else(String::new, |s| s.to_string_lossy().to_string());
+            self.game_keys.push(path); // Game baru di belakang; urutan yang sudah diatur tetap.
+            games::save_keys(&self.game_keys);
+            self.reload_games();
+            self.game_status = format!("{name} ditambahkan.");
+        }
+        self.render();
+    }
+
+    fn remove_game(&mut self, index: usize) {
+        if index < self.games.len() {
+            let key = self.games[index].key.clone();
+            self.game_keys.retain(|k| !k.eq_ignore_ascii_case(&key));
+            games::save_keys(&self.game_keys);
+            self.reload_games();
+            self.render();
+        }
+    }
+
     fn on_mouse_move(&mut self, lparam: LPARAM) {
-        if self.drag_to() {
+        if self.drag_game(lparam) || self.drag_to() {
             return;
         }
         unsafe {
@@ -1223,6 +1365,25 @@ impl App {
                     None => Some((self.prayer_city as f32 * draw::PICKER_ROW_H - draw::PICKER_ROW_H).clamp(0.0, draw::PICKER_MAX_SCROLL)),
                 };
                 self.render();
+                return;
+            }
+            Hit::GameScan => {
+                self.scan_steam();
+                self.render();
+                return;
+            }
+            Hit::GameAdd => {
+                // Dialog file punya loop pesan sendiri: dibuka setelah state App dilepas.
+                unsafe {
+                    let _ = PostMessageW(self.hwnd, WM_ADD_GAME, WPARAM(0), LPARAM(0));
+                }
+                return;
+            }
+            Hit::GameTile(i) => {
+                if let Some(game) = self.games.get(i) {
+                    self.game_status = if games::launch(game) { format!("Membuka {}…", game.name) } else { format!("{} belum bisa dibuka.", game.name) };
+                    self.render();
+                }
                 return;
             }
             Hit::CityItem(index) => {
@@ -1411,7 +1572,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                with_app(|app| if !app.finish_drag() && !app.game_locked() { app.on_click(lparam) });
+                with_app(|app| if !app.finish_game_drag() && !app.finish_drag() && !app.game_locked() { app.on_click(lparam) });
                 LRESULT(0)
             }
             WM_CAPTURECHANGED => {
@@ -1423,8 +1584,16 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 LRESULT(0)
             }
             WM_RBUTTONUP => {
-                if !with_app(|app| app.game_locked()).unwrap_or(false) {
-                    show_menu(hwnd);
+                match with_app(|app| (app.game_locked(), { let (x, y) = app.to_dip(lparam); app.hit(x, y) })) {
+                    Some((true, _)) | None => {}
+                    Some((false, Hit::GameTile(i))) => show_game_menu(hwnd, i),
+                    Some((false, _)) => show_menu(hwnd),
+                }
+                LRESULT(0)
+            }
+            WM_ADD_GAME => {
+                if let Some(path) = pick_game_file(hwnd) {
+                    with_app(|app| app.add_game(path));
                 }
                 LRESULT(0)
             }
@@ -1563,13 +1732,46 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
     }
 }
 
+/// Klik kanan ikon game: menu kecil bertema "Hapus dari daftar" (shortcut/game aslinya tidak disentuh).
+unsafe fn show_game_menu(hwnd: HWND, index: usize) {
+    let Ok(popup) = CreatePopupMenu() else { return };
+    let theme = &THEMES[with_app(|app| app.theme).unwrap_or(0)];
+    menu::begin(popup, menu::Colors { background: theme.background, surface: theme.surface, text: 0xFFFFFF });
+    menu::append(popup, MF_STRING, 1, "Hapus dari daftar");
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+    let _ = SetForegroundWindow(hwnd);
+    let chosen: BOOL = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd, None);
+    let _ = DestroyMenu(popup);
+    menu::end();
+    if chosen.0 == 1 {
+        with_app(|app| app.remove_game(index));
+    }
+}
+
+/// Pilih shortcut (.lnk/.url) atau aplikasi (.exe); shortcut disimpan apa adanya, bukan file tujuannya.
+unsafe fn pick_game_file(hwnd: HWND) -> Option<String> {
+    use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+    use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NODEREFERENCELINKS, SIGDN_FILESYSPATH};
+    let dialog: IFileOpenDialog = windows::Win32::System::Com::CoCreateInstance(&FileOpenDialog, None, windows::Win32::System::Com::CLSCTX_INPROC_SERVER).ok()?;
+    let options = dialog.GetOptions().ok()?;
+    dialog.SetOptions(options | FOS_NODEREFERENCELINKS | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM).ok()?;
+    dialog.SetTitle(w!("Pilih shortcut atau aplikasi game")).ok()?;
+    dialog.SetFileTypes(&[COMDLG_FILTERSPEC { pszName: w!("Shortcut atau aplikasi"), pszSpec: w!("*.lnk;*.url;*.exe") }]).ok()?;
+    dialog.Show(hwnd).ok()?;
+    let path = dialog.GetResult().ok()?.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+    let text = path.to_string().ok();
+    windows::Win32::System::Com::CoTaskMemFree(Some(path.0 as _));
+    text
+}
+
 /// Menu klik kanan (notch atau tray). Dipanggil tanpa memegang state App, karena menu
 /// menjalankan message loop sendiri.
 unsafe fn show_menu(hwnd: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let (hidden, offline) = with_app(|app| (app.hidden, app.offline)).unwrap_or((false, false));
-    let (clipboard_on, prayer_on, speed_on) =
-        with_app(|app| (app.clipboard_enabled, app.prayer_enabled, app.speed_enabled)).unwrap_or((true, true, true));
+    let (clipboard_on, prayer_on, speed_on, games_on) =
+        with_app(|app| (app.clipboard_enabled, app.prayer_enabled, app.speed_enabled, app.games_enabled)).unwrap_or((true, true, true, true));
     let autostart = autostart_enabled();
     let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
     let show_label = if hidden { "Tampilkan notch" } else { "Minimalkan ke tray" };
@@ -1586,6 +1788,7 @@ unsafe fn show_menu(hwnd: HWND) {
     menu::separator(menu);
     item(MF_STRING | MF_GRAYED, 0, "Fitur aktif");
     item(MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, "Halaman Clipboard");
+    item(MF_STRING | checked(games_on), MENU_GAMES, "Halaman Game");
     item(MF_STRING | checked(prayer_on), MENU_PRAYER, "Halaman Jadwal Salat (dan pengingat)");
     item(MF_STRING | checked(speed_on), MENU_SPEED, "Notifikasi dan kecepatan internet");
     menu::separator(menu);
@@ -1611,10 +1814,11 @@ unsafe fn show_menu(hwnd: HWND) {
         MENU_RESET_POSITION => {
             with_app(|app| app.reset_position());
         }
-        MENU_CLIPBOARD | MENU_PRAYER | MENU_SPEED => {
+        MENU_CLIPBOARD | MENU_PRAYER | MENU_SPEED | MENU_GAMES => {
             with_app(|app| {
                 let (name, flag) = match chosen.0 as usize {
                     MENU_CLIPBOARD => ("ClipboardEnabled", &mut app.clipboard_enabled),
+                    MENU_GAMES => ("GamesEnabled", &mut app.games_enabled),
                     MENU_PRAYER => ("PrayerEnabled", &mut app.prayer_enabled),
                     _ => ("SpeedEnabled", &mut app.speed_enabled),
                 };
