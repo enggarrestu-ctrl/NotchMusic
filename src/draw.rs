@@ -718,7 +718,7 @@ impl Gfx {
                 if page == PAGE_CLIPBOARD {
                     self.paint_clipboard(v, page_alpha, shifted)?;
                 } else if page == PAGE_PRAYER {
-                    self.paint_prayer(v, page_alpha)?;
+                    self.paint_prayer(v, page_alpha, shifted)?;
                 } else {
                     self.paint_music(v, page_alpha, elapsed, duration, fraction, shifted)?;
                 }
@@ -1077,7 +1077,7 @@ impl Gfx {
 
     /// Halaman salat: kartu waktu berikutnya + lintasan matahari (busur siang, matahari/bulan saat ini,
     /// label sejajar di bawah cakrawala seperti sumbu waktu).
-    unsafe fn paint_prayer(&self, v: &View, alpha: f32) -> Result<()> {
+    unsafe fn paint_prayer(&self, v: &View, alpha: f32, base: Matrix3x2) -> Result<()> {
         let rt = &self.target;
         let theme = v.theme;
         let p = &v.prayer;
@@ -1094,16 +1094,24 @@ impl Gfx {
         rt.FillRoundedRectangle(&pill, &self.brush(if hover { theme.accent } else { theme.soft }, alpha)?);
         let ink = self.brush(theme.ink, alpha)?;
         self.text(p.city, &self.formats.search, rect(l + 10.0, pill.rect.top, r - 24.0, pill.rect.bottom), &ink);
-        self.stroke_icon(&self.icons.chevron, r - 13.0, PRAYER_HEADER_Y, 12.0, 1.8, &ink, Matrix3x2::identity());
+        self.stroke_icon(&self.icons.chevron, r - 13.0, PRAYER_HEADER_Y, 12.0, 1.8, &ink, base);
 
         // Kartu waktu berikutnya.
         let (cl, ct, cr, cb) = PRAYER_CARD;
         rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rect(cl, ct, cr, cb), radiusX: 12.0, radiusY: 12.0 }, &accent);
         let label = if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" };
         self.text(label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 8.0, ct + 26.0), &self.brush(theme.ink, alpha * 0.7)?);
+        // Nama + jam satu baris; bila nama panjang (Maghrib) keduanya diperkecil bersama, tidak dipotong "…".
+        let time = p.next_time.label();
         let name_w = self.measure(p.next_time.name, &self.formats.card_name);
-        self.text(p.next_time.name, &self.formats.card_name, rect(cl + 12.0, ct + 28.0, cl + 14.0 + name_w, ct + 56.0), &ink);
-        self.text(&p.next_time.label(), &self.formats.card_time, rect(cl + 18.0 + name_w, ct + 26.0, cr - 4.0, ct + 56.0), &ink);
+        let time_w = self.measure(&time, &self.formats.card_time);
+        let (left, gap) = (cl + 12.0, 5.0);
+        let scale = ((cr - 10.0 - left) / (name_w + gap + time_w)).min(1.0);
+        let row = Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: left * (1.0 - scale), M32: (ct + 42.0) * (1.0 - scale) };
+        rt.SetTransform(&multiply(&row, &base));
+        self.text(p.next_time.name, &self.formats.card_name, rect(left, ct + 28.0, left + name_w + 2.0, ct + 56.0), &ink);
+        self.text(&time, &self.formats.card_time, rect(left + name_w + gap, ct + 26.0, left + name_w + gap + time_w + 2.0, ct + 56.0), &ink);
+        rt.SetTransform(&base);
         self.text(&format!("{} · {}", p.countdown, p.zone), &self.formats.card_note, rect(cl + 12.0, ct + 58.0, cr - 6.0, ct + 76.0), &ink);
 
         // Lintasan matahari.
@@ -1149,7 +1157,8 @@ impl Gfx {
             rt.FillEllipse(&ellipse(sx, sy, 7.5), &self.brush(SUN, alpha * 0.3)?);
             rt.FillEllipse(&ellipse(sx, sy, 5.5), &sun);
         } else {
-            rt.FillGeometry(&self.crescent(sx, horizon - 12.0)?, &self.brush(0xE8ECF4, alpha)?, None::<&ID2D1Brush>);
+            // Sabit berat ke kiri: geser +2 agar tampak tepat di atas posisinya, dan beri jarak dari titik cakrawala.
+            rt.FillGeometry(&self.crescent(sx + 2.0, horizon - 17.0)?, &self.brush(0xE8ECF4, alpha)?, None::<&ID2D1Brush>);
         }
         Ok(())
     }
