@@ -114,6 +114,7 @@ pub enum Hit {
     ClipCopy(u64),
     ClipDelete(u64),
     PrayerCity,
+    CityItem(usize),
 }
 
 pub const PAGE_MUSIC: usize = 0;
@@ -132,7 +133,16 @@ pub struct PrayerView<'a> {
     pub next: Option<usize>,
     pub next_time: crate::prayer::PrayerTime,
     pub countdown: &'a str,
+    pub city_index: usize,
+    /// Daftar kota terbuka: posisi gulir (DIP).
+    pub picker: Option<f32>,
 }
+
+const PICKER_TOP: f32 = PRAYER_HEADER_Y + 14.0;
+const PICKER_BOTTOM: f32 = 138.0;
+pub const PICKER_ROW_H: f32 = 22.0;
+/// Batas gulir daftar kota.
+pub const PICKER_MAX_SCROLL: f32 = 49.0 * PICKER_ROW_H - (PICKER_BOTTOM - PICKER_TOP - 8.0);
 
 pub struct ClipRow<'a> {
     pub id: u64,
@@ -306,7 +316,7 @@ pub struct ClipHit<'a> {
     pub scroll: f32,
 }
 
-pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip: &ClipHit, x: f32, y: f32) -> Hit {
+pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip: &ClipHit, picker: Option<f32>, x: f32, y: f32) -> Hit {
     if t < 0.95 {
         return Hit::None;
     }
@@ -321,6 +331,12 @@ pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip
     }
     if page == PAGE_PRAYER {
         let (l, r) = PRAYER_CITY;
+        if let Some(scroll) = picker {
+            if x >= l && x <= r - 8.0 && y >= PICKER_TOP + 4.0 && y <= PICKER_BOTTOM - 4.0 {
+                let index = ((y - PICKER_TOP - 4.0 + scroll) / PICKER_ROW_H) as usize;
+                return if index < crate::prayer::CITIES.len() { Hit::CityItem(index) } else { Hit::None };
+            }
+        }
         return if x >= l && x <= r && (y - PRAYER_HEADER_Y).abs() <= 11.0 { Hit::PrayerCity } else { Hit::None };
     }
     if near(x, y, PIN_X, ROW_BUTTONS_Y, 11.0) {
@@ -405,6 +421,7 @@ struct Formats {
     sky_name: IDWriteTextFormat,
     sky_time: IDWriteTextFormat,
     card_label: IDWriteTextFormat,
+    card_zone: IDWriteTextFormat,
     card_name: IDWriteTextFormat,
     card_time: IDWriteTextFormat,
     card_note: IDWriteTextFormat,
@@ -497,9 +514,10 @@ impl Gfx {
                 sky_name: format(&dwrite, 9.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
                 sky_time: format(&dwrite, 12.0, semi, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
                 card_label: format(&dwrite, 9.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
+                card_zone: format(&dwrite, 9.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING, false, false)?,
                 card_name: format(&dwrite, 13.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
                 card_time: format(&dwrite, 22.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
-                card_note: format(&dwrite, 11.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, true)?,
+                card_note: format(&dwrite, 11.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
             };
             let icons = Icons {
                 logo: logo_geometry(&factory)?,
@@ -1138,8 +1156,11 @@ impl Gfx {
         // Kartu waktu berikutnya.
         let (cl, ct, cr, cb) = PRAYER_CARD;
         rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rect(cl, ct, cr, cb), radiusX: 12.0, radiusY: 12.0 }, &accent);
+        // Baris label: status di kiri, zona waktu di kanan (UI/UX Pro Max: label ringkas satu baris, posisi konsisten).
         let label = if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" };
-        self.text(label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 8.0, ct + 26.0), &self.brush(theme.ink, alpha * 0.7)?);
+        let muted = self.brush(theme.ink, alpha * 0.7)?;
+        self.text(label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 12.0, ct + 26.0), &muted);
+        self.text(p.zone, &self.formats.card_zone, rect(cl + 12.0, ct + 12.0, cr - 12.0, ct + 26.0), &muted);
         // Nama + jam satu baris; bila nama panjang (Maghrib) keduanya diperkecil bersama, tidak dipotong "…".
         let time = p.next_time.label();
         let name_w = self.measure(p.next_time.name, &self.formats.card_name);
@@ -1151,8 +1172,14 @@ impl Gfx {
         self.text(p.next_time.name, &self.formats.card_name, rect(left, ct + 28.0, left + name_w + 2.0, ct + 56.0), &ink);
         self.text(&time, &self.formats.card_time, rect(left + name_w + gap, ct + 26.0, left + name_w + gap + time_w + 2.0, ct + 56.0), &ink);
         rt.SetTransform(&base);
-        // Hitung mundur panjang ("7 jam 34 menit lagi · WIB") turun ke baris kedua, tidak dipotong.
-        self.text(&format!("{} · {}", p.countdown, p.zone), &self.formats.card_note, rect(cl + 12.0, ct + 56.0, cr - 8.0, cb - 6.0), &ink);
+        // Hitung mundur satu baris; bila terlalu panjang ("7 jam 34 menit lagi") diperkecil, tidak dipotong/terlipat.
+        let note_w = self.measure(p.countdown, &self.formats.card_note);
+        let note_scale = ((cr - 12.0 - left) / note_w.max(1.0)).min(1.0);
+        let note_y = (ct + cb) / 2.0 + 24.0;
+        let fit = Matrix3x2 { M11: note_scale, M12: 0.0, M21: 0.0, M22: note_scale, M31: left * (1.0 - note_scale), M32: note_y * (1.0 - note_scale) };
+        rt.SetTransform(&multiply(&fit, &base));
+        self.text(p.countdown, &self.formats.card_note, rect(left, note_y - 9.0, left + note_w + 2.0, note_y + 9.0), &ink);
+        rt.SetTransform(&base);
 
         // Lintasan matahari.
         let sky = crate::prayer::Sky { times: &p.times, width: SKY_W, height: SKY_H };
@@ -1190,15 +1217,15 @@ impl Gfx {
             self.text(time.name, &self.formats.sky_name, rect(x - 26.0, horizon + 4.0, x + 26.0, horizon + 15.0), &self.brush(color, alpha * fade * if is_next { 1.0 } else { 0.8 })?);
             self.text(&time.label(), &self.formats.sky_time, rect(x - 26.0, horizon + 14.0, x + 26.0, horizon + 30.0), &self.brush(color, alpha * fade)?);
         }
-        // Siang: matahari bercahaya di busur. Malam: bulan sabit di atas cakrawala.
+        // Siang: matahari bercahaya di busur. Malam tidak ada penanda (busur sudah penuh/belum mulai).
         let (sx, sy) = at(p.now);
         if sky.is_day(p.now) {
             rt.FillEllipse(&ellipse(sx, sy, 10.0), &self.brush(SUN, alpha * 0.18)?);
             rt.FillEllipse(&ellipse(sx, sy, 7.5), &self.brush(SUN, alpha * 0.3)?);
             rt.FillEllipse(&ellipse(sx, sy, 5.5), &sun);
-        } else {
-            // Sabit berat ke kiri: geser +2 agar tampak tepat di atas posisinya, dan beri jarak dari titik cakrawala.
-            rt.FillGeometry(&self.crescent(sx + 2.0, horizon - 17.0)?, &self.brush(0xE8ECF4, alpha)?, None::<&ID2D1Brush>);
+        }
+        if let Some(scroll) = p.picker {
+            self.paint_city_picker(v, alpha, scroll)?;
         }
         Ok(())
     }
@@ -1233,15 +1260,40 @@ impl Gfx {
         Ok(geometry)
     }
 
-    /// Bulan sabit: lingkaran dikurangi lingkaran yang digeser ke kanan atas.
-    unsafe fn crescent(&self, cx: f32, cy: f32) -> Result<ID2D1PathGeometry> {
-        let outer = self.factory.CreateEllipseGeometry(&ellipse(cx, cy, 6.0))?;
-        let inner = self.factory.CreateEllipseGeometry(&ellipse(cx + 3.0, cy - 2.0, 5.5))?;
-        let geometry = self.factory.CreatePathGeometry()?;
-        let sink = geometry.Open()?;
-        outer.CombineWithGeometry(&inner, D2D1_COMBINE_MODE_EXCLUDE, None, 0.05, &sink)?;
-        sink.Close()?;
-        Ok(geometry)
+    /// Daftar kota seperti dropdown NotchMusic: kotak warna Soft di bawah pil, teks Ink, baris disorot Accent,
+    /// kota terpilih bertanda ✓; digulir dengan roda mouse.
+    unsafe fn paint_city_picker(&self, v: &View, alpha: f32, scroll: f32) -> Result<()> {
+        let rt = &self.target;
+        let theme = v.theme;
+        let (l, r) = PRAYER_CITY;
+        let panel = D2D1_ROUNDED_RECT { rect: rect(l, PICKER_TOP, r, PICKER_BOTTOM), radiusX: 7.0, radiusY: 7.0 };
+        rt.FillRoundedRectangle(&panel, &self.brush(theme.soft, alpha)?);
+        rt.DrawRoundedRectangle(&panel, &self.brush(theme.surface, alpha)?, 1.0, None::<&ID2D1StrokeStyle>);
+        rt.PushAxisAlignedClip(&rect(l + 4.0, PICKER_TOP + 4.0, r - 4.0, PICKER_BOTTOM - 4.0), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        let ink = self.brush(theme.ink, alpha)?;
+        for (i, city) in crate::prayer::CITIES.iter().enumerate() {
+            let top = PICKER_TOP + 4.0 - scroll + i as f32 * PICKER_ROW_H;
+            if top + PICKER_ROW_H < PICKER_TOP || top > PICKER_BOTTOM {
+                continue;
+            }
+            if v.hover == Hit::CityItem(i) {
+                let row = D2D1_ROUNDED_RECT { rect: rect(l + 4.0, top, r - 8.0, top + PICKER_ROW_H), radiusX: 5.0, radiusY: 5.0 };
+                rt.FillRoundedRectangle(&row, &self.brush(theme.accent, alpha)?);
+            }
+            if i == v.prayer.city_index {
+                self.text("✓", &self.formats.row, rect(l + 9.0, top, l + 22.0, top + PICKER_ROW_H), &ink);
+            }
+            self.text(city.name, &self.formats.row, rect(l + 22.0, top, r - 10.0, top + PICKER_ROW_H), &ink);
+        }
+        rt.PopAxisAlignedClip();
+        // Scrollbar tipis.
+        let content = crate::prayer::CITIES.len() as f32 * PICKER_ROW_H;
+        let span = PICKER_BOTTOM - PICKER_TOP - 8.0;
+        let thumb_h = (span * span / content).max(14.0);
+        let thumb_top = PICKER_TOP + 4.0 + (span - thumb_h) * (scroll / (content - span)).clamp(0.0, 1.0);
+        let thumb = D2D1_ROUNDED_RECT { rect: rect(r - 6.0, thumb_top, r - 3.0, thumb_top + thumb_h), radiusX: 1.5, radiusY: 1.5 };
+        rt.FillRoundedRectangle(&thumb, &self.brush(theme.ink, alpha * 0.35)?);
+        Ok(())
     }
 
     /// Teks di tengah area; diperkecil seragam bila tidak muat (seperti Viewbox StretchDirection=DownOnly).
@@ -1656,7 +1708,7 @@ mod tests {
         let media = MediaState { active: true, end: 2_000_000_000, ..Default::default() };
         let track = seek_track(30.0, 30.0);
         let clip = ClipHit { ids: &[], total: 0, scroll: 0.0 };
-        let hit = |t, x, y| hit_test(t, PAGE_MUSIC, &media, track, &clip, x, y);
+        let hit = |t, x, y| hit_test(t, PAGE_MUSIC, &media, track, &clip, None, x, y);
         assert_eq!(hit(0.5, CONTROLS_X, ROW_BUTTONS_Y), Hit::None);
         assert_eq!(hit(1.0, CONTROLS_X, ROW_BUTTONS_Y), Hit::PlayPause);
         assert_eq!(hit(1.0, PREVIOUS_X, ROW_BUTTONS_Y), Hit::Previous);
@@ -1673,7 +1725,7 @@ mod tests {
         let right = clip_list_right(ids.len());
         let (_, copy_x, delete_x) = clip_columns(right);
         let y = CLIP_LIST_TOP + CLIP_ROW_H / 2.0;
-        let hit = |x, y| hit_test(1.0, PAGE_CLIPBOARD, &media, (0.0, 0.0), &clip, x, y);
+        let hit = |x, y| hit_test(1.0, PAGE_CLIPBOARD, &media, (0.0, 0.0), &clip, None, x, y);
         assert_eq!(hit(copy_x, y), Hit::ClipCopy(11));
         assert_eq!(hit(delete_x, y), Hit::ClipDelete(11));
         assert_eq!(hit(PAGE_LEFT + 20.0, y), Hit::ClipRow(11));

@@ -11,6 +11,7 @@ mod http;
 mod lyrics;
 mod lyrics_window;
 mod media;
+mod menu;
 mod motion;
 mod net;
 mod notify;
@@ -55,10 +56,7 @@ const WM_NET: u32 = WM_APP + 2;
 const WM_TRAY: u32 = WM_APP + 3;
 const WM_LYRICS: u32 = WM_APP + 4;
 const WM_LYRIC_CHOICES: u32 = WM_APP + 5;
-const WM_CITY_MENU: u32 = WM_APP + 6;
 const WM_NOTICE: u32 = WM_APP + 7;
-/// Id menu kota jadwal salat: MENU_CITY + indeks kota.
-const MENU_CITY: usize = 1000;
 const NOTICE_SECONDS: f32 = 5.0;
 // Tidak tersedia di modul WindowsAndMessaging crate windows.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -118,6 +116,8 @@ struct App {
     prayer_minute: i64,
     /// Pengingat singkat di notch kecil dan kapan mulai tampil.
     notice: Option<(String, Instant)>,
+    /// Daftar kota terbuka di halaman salat: posisi gulir.
+    city_picker: Option<f32>,
     /// Fitur yang bisa dimatikan dari menu klik kanan.
     clipboard_enabled: bool,
     prayer_enabled: bool,
@@ -265,6 +265,7 @@ fn main() -> Result<()> {
             prayer_city: read_setting("PrayerCity").map(|v| v as usize).filter(|&i| i < prayer::CITIES.len()).unwrap_or(prayer::JAKARTA),
             prayer_minute: -1,
             notice: None,
+            city_picker: None,
             clipboard_enabled: read_setting("ClipboardEnabled").map_or(true, |v| v != 0),
             prayer_enabled: read_setting("PrayerEnabled").map_or(true, |v| v != 0),
             speed_enabled,
@@ -477,6 +478,8 @@ impl App {
                 next: next_index,
                 next_time,
                 countdown: &countdown,
+                city_index: self.prayer_city,
+                picker: self.city_picker,
             },
             notice: notice.as_deref(),
             arrows: self.pages().len() > 1,
@@ -841,6 +844,7 @@ impl App {
         self.started = Instant::now();
         if target < 0.5 {
             self.search_focused = false;
+            self.city_picker = None;
         }
         self.start_animation_timer();
         unsafe {
@@ -996,7 +1000,7 @@ impl App {
         let (ids, total) = self.clipboard_hit();
         let clip = ClipHit { ids: &ids, total, scroll: self.scroll };
         let page = if self.page_transition.is_some() { usize::MAX } else { self.page };
-        draw::hit_test(self.t, page, &self.media.lock().unwrap(), self.gfx.track, &clip, x, y)
+        draw::hit_test(self.t, page, &self.media.lock().unwrap(), self.gfx.track, &clip, self.city_picker, x, y)
     }
 
     fn scroll_by(&mut self, delta: f32) {
@@ -1197,6 +1201,12 @@ impl App {
     fn on_click(&mut self, lparam: LPARAM) {
         let (x, y) = self.to_dip(lparam);
         let hit = self.hit(x, y);
+        if self.city_picker.is_some() && !matches!(hit, Hit::CityItem(_) | Hit::PrayerCity) {
+            // Klik di luar daftar kota: tutup daftarnya saja, seperti dropdown.
+            self.city_picker = None;
+            self.render();
+            return;
+        }
         if hit != Hit::ClipSearch && self.search_focused {
             self.search_focused = false;
             self.render();
@@ -1207,10 +1217,19 @@ impl App {
                 return;
             }
             Hit::PrayerCity => {
-                // Menu kota punya loop pesan sendiri: dibuka setelah state App dilepas.
-                unsafe {
-                    let _ = PostMessageW(self.hwnd, WM_CITY_MENU, WPARAM(0), LPARAM(0));
-                }
+                // Buka/tutup daftar kota; saat dibuka, kota terpilih langsung terlihat.
+                self.city_picker = match self.city_picker {
+                    Some(_) => None,
+                    None => Some((self.prayer_city as f32 * draw::PICKER_ROW_H - draw::PICKER_ROW_H).clamp(0.0, draw::PICKER_MAX_SCROLL)),
+                };
+                self.render();
+                return;
+            }
+            Hit::CityItem(index) => {
+                self.prayer_city = index;
+                self.city_picker = None;
+                write_setting("PrayerCity", index as u32);
+                self.render();
                 return;
             }
             Hit::PageLeft | Hit::PageRight => {
@@ -1411,6 +1430,8 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             }
             // Game tidak kehilangan fokus/ter-minimize saat notch diklik.
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            WM_MEASUREITEM if menu::measure(hwnd, lparam) => LRESULT(1),
+            WM_DRAWITEM if menu::draw(lparam) => LRESULT(1),
             WM_TIMER => {
                 match wparam.0 {
 
@@ -1441,10 +1462,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 });
                 LRESULT(0)
             }
-            WM_CITY_MENU => {
-                show_city_menu(hwnd);
-                LRESULT(0)
-            }
+
             WM_NET => {
                 with_app(|app| app.render());
                 LRESULT(0)
@@ -1476,6 +1494,9 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 with_app(|app| {
                     if app.t > 0.95 && app.page == draw::PAGE_CLIPBOARD {
                         app.scroll_by(-delta / 120.0 * draw::CLIP_ROW_H);
+                    } else if let Some(scroll) = app.city_picker {
+                        app.city_picker = Some((scroll - delta / 120.0 * draw::PICKER_ROW_H * 2.0).clamp(0.0, draw::PICKER_MAX_SCROLL));
+                        app.render();
                     }
                 });
                 LRESULT(0)
@@ -1542,30 +1563,6 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
     }
 }
 
-/// Daftar kota jadwal salat, dibuka dari pil kota di halaman salat.
-unsafe fn show_city_menu(hwnd: HWND) {
-    let Ok(menu) = CreatePopupMenu() else { return };
-    let current = with_app(|app| app.prayer_city).unwrap_or(prayer::JAKARTA);
-    for (i, city) in prayer::CITIES.iter().enumerate() {
-        let name: Vec<u16> = format!("{} ({})", city.name, city.zone()).encode_utf16().chain(Some(0)).collect();
-        let flags = MF_STRING | if i == current { MF_CHECKED } else { MF_UNCHECKED } | if i > 0 && i % 25 == 0 { MF_MENUBARBREAK } else { MF_STRING };
-        let _ = AppendMenuW(menu, flags, MENU_CITY + i, PCWSTR(name.as_ptr()));
-    }
-    let mut cursor = POINT::default();
-    let _ = GetCursorPos(&mut cursor);
-    let _ = SetForegroundWindow(hwnd);
-    let chosen: BOOL = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd, None);
-    let _ = DestroyMenu(menu);
-    let index = (chosen.0 as usize).wrapping_sub(MENU_CITY);
-    if index < prayer::CITIES.len() {
-        with_app(|app| {
-            app.prayer_city = index;
-            write_setting("PrayerCity", index as u32);
-            app.render();
-        });
-    }
-}
-
 /// Menu klik kanan (notch atau tray). Dipanggil tanpa memegang state App, karena menu
 /// menjalankan message loop sendiri.
 unsafe fn show_menu(hwnd: HWND) {
@@ -1575,21 +1572,24 @@ unsafe fn show_menu(hwnd: HWND) {
         with_app(|app| (app.clipboard_enabled, app.prayer_enabled, app.speed_enabled)).unwrap_or((true, true, true));
     let autostart = autostart_enabled();
     let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-    let show_label = if hidden { w!("Tampilkan notch") } else { w!("Minimalkan ke tray") };
-    let _ = AppendMenuW(menu, MF_STRING, MENU_SHOW, show_label);
-    let _ = AppendMenuW(menu, MF_STRING, MENU_LYRICS_WINDOW, w!("Lirik…"));
-    let _ = AppendMenuW(menu, MF_STRING, MENU_REFRESH_LYRICS, w!("Cari ulang lirik"));
-    let _ = AppendMenuW(menu, MF_STRING | checked(offline), MENU_OFFLINE, w!("Lirik offline saja"));
-    let _ = AppendMenuW(menu, MF_STRING | checked(autostart), MENU_AUTOSTART, w!("Jalan otomatis saat Windows mulai"));
-    let _ = AppendMenuW(menu, MF_STRING, MENU_RESET_POSITION, w!("Reset posisi ke atas tengah layar"));
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("Fitur aktif"));
-    let _ = AppendMenuW(menu, MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, w!("Halaman Clipboard"));
-    let _ = AppendMenuW(menu, MF_STRING | checked(prayer_on), MENU_PRAYER, w!("Halaman Jadwal Salat (dan pengingat)"));
-    let _ = AppendMenuW(menu, MF_STRING | checked(speed_on), MENU_SPEED, w!("Notifikasi dan kecepatan internet"));
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("Keluar"));
-    let mut cursor = POINT::default();
+    let show_label = if hidden { "Tampilkan notch" } else { "Minimalkan ke tray" };
+    // Menu digambar sendiri dengan warna tema notch (lihat menu.rs).
+    let theme = &THEMES[with_app(|app| app.theme).unwrap_or(0)];
+    menu::begin(menu, menu::Colors { background: theme.background, surface: theme.surface, text: 0xFFFFFF });
+    let item = |flags: MENU_ITEM_FLAGS, id: usize, text: &str| menu::append(menu, flags, id, text);
+    item(MF_STRING, MENU_SHOW, show_label);
+    item(MF_STRING, MENU_LYRICS_WINDOW, "Lirik…");
+    item(MF_STRING, MENU_REFRESH_LYRICS, "Cari ulang lirik");
+    item(MF_STRING | checked(offline), MENU_OFFLINE, "Lirik offline saja");
+    item(MF_STRING | checked(autostart), MENU_AUTOSTART, "Jalan otomatis saat Windows mulai");
+    item(MF_STRING, MENU_RESET_POSITION, "Reset posisi ke atas tengah layar");
+    menu::separator(menu);
+    item(MF_STRING | MF_GRAYED, 0, "Fitur aktif");
+    item(MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, "Halaman Clipboard");
+    item(MF_STRING | checked(prayer_on), MENU_PRAYER, "Halaman Jadwal Salat (dan pengingat)");
+    item(MF_STRING | checked(speed_on), MENU_SPEED, "Notifikasi dan kecepatan internet");
+    menu::separator(menu);
+    item(MF_STRING, MENU_EXIT, "Keluar");    let mut cursor = POINT::default();
     let _ = GetCursorPos(&mut cursor);
     let _ = SetForegroundWindow(hwnd);
     let chosen: BOOL = TrackPopupMenu(
@@ -1602,6 +1602,7 @@ unsafe fn show_menu(hwnd: HWND) {
         None,
     );
     let _ = DestroyMenu(menu);
+    menu::end();
     match chosen.0 as usize {
         MENU_SHOW => {
             with_app(|app| app.set_hidden(!hidden));
