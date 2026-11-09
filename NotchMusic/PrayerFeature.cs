@@ -43,7 +43,8 @@ public partial class MainWindow
         PrayerNextLabel.Text = today is null ? "BESOK" : "BERIKUTNYA";
         PrayerNextName.Text = next.Name + " ";
         PrayerNextTime.Text = next.Time.ToString("HH.mm", CultureInfo.InvariantCulture);
-        PrayerCountdown.Text = Countdown(next.Time - now) + " · " + city.Zone;
+        PrayerCountdown.Text = Countdown(next.Time - now);
+        PrayerZone.Text = city.Zone;
     }
 
     // "1 jam 5 menit lagi" / "59 menit lagi" / "kurang dari 1 menit": menit dibulatkan ke atas agar tidak terlambat.

@@ -794,7 +794,11 @@
                         <Border CornerRadius="12" Background="{DynamicResource NotchAccent}" Padding="12,6" Margin="0,0,6,0"
                                 AutomationProperties.Name="Waktu salat berikutnya">
                             <StackPanel VerticalAlignment="Center">
-                                <TextBlock x:Name="PrayerNextLabel" Text="BERIKUTNYA" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource NotchInk}" Opacity="0.7" />
+                                <!-- Baris label: status di kiri, zona waktu di kanan (label ringkas satu baris, posisi konsisten). -->
+                                <Grid Opacity="0.7">
+                                    <TextBlock x:Name="PrayerNextLabel" Text="BERIKUTNYA" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource NotchInk}" />
+                                    <TextBlock x:Name="PrayerZone" Text="WIB" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource NotchInk}" HorizontalAlignment="Right" />
+                                </Grid>
                                 <!-- Nama panjang (Subuh/Maghrib): nama + jam diperkecil bersama, tidak dipotong "…". -->
                                 <Viewbox Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Left">
                                     <TextBlock Foreground="{DynamicResource NotchInk}">
@@ -802,9 +806,11 @@
                                         <Run x:Name="PrayerNextTime" Text="19.01" FontSize="22" FontWeight="Bold" />
                                     </TextBlock>
                                 </Viewbox>
-                                <!-- Hitung mundur panjang ("7 jam 34 menit lagi · WIB") turun ke baris kedua, tidak dipotong. -->
-                                <TextBlock x:Name="PrayerCountdown" Text="59 menit lagi" FontSize="11" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource NotchInk}" TextWrapping="Wrap" />
+                                <!-- Hitung mundur satu baris; bila terlalu panjang ("7 jam 34 menit lagi") diperkecil, tidak terlipat. -->
+                                <Viewbox Stretch="Uniform" StretchDirection="DownOnly" HorizontalAlignment="Left">
+                                    <TextBlock x:Name="PrayerCountdown" Text="59 menit lagi" FontSize="11" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource NotchInk}" />
+                                </Viewbox>
                             </StackPanel>
                         </Border>
                         <!-- Lintasan matahari: digambar ulang tiap menit oleh RenderPrayer (PrayerSky.cs). -->
