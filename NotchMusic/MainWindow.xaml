@@ -802,8 +802,9 @@
                                         <Run x:Name="PrayerNextTime" Text="19.01" FontSize="22" FontWeight="Bold" />
                                     </TextBlock>
                                 </Viewbox>
+                                <!-- Hitung mundur panjang ("7 jam 34 menit lagi · WIB") turun ke baris kedua, tidak dipotong. -->
                                 <TextBlock x:Name="PrayerCountdown" Text="59 menit lagi" FontSize="11" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource NotchInk}" TextTrimming="CharacterEllipsis" />
+                                           Foreground="{DynamicResource NotchInk}" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
                         <!-- Lintasan matahari: digambar ulang tiap menit oleh RenderPrayer (PrayerSky.cs). -->
