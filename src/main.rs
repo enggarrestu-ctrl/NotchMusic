@@ -11,6 +11,7 @@ mod lyrics;
 mod lyrics_window;
 mod media;
 mod net;
+mod notify;
 mod prayer;
 
 use std::cell::RefCell;
@@ -53,6 +54,7 @@ const WM_TRAY: u32 = WM_APP + 3;
 const WM_LYRICS: u32 = WM_APP + 4;
 const WM_LYRIC_CHOICES: u32 = WM_APP + 5;
 const WM_CITY_MENU: u32 = WM_APP + 6;
+const WM_NOTICE: u32 = WM_APP + 7;
 /// Id menu kota jadwal salat: MENU_CITY + indeks kota.
 const MENU_CITY: usize = 1000;
 const NOTICE_SECONDS: f32 = 5.0;
@@ -114,7 +116,9 @@ struct App {
     /// Fitur yang bisa dimatikan dari menu klik kanan.
     clipboard_enabled: bool,
     prayer_enabled: bool,
+    /// "Notifikasi dan kecepatan internet".
     speed_enabled: bool,
+    notices: std::sync::Arc<notify::Shared>,
     from: f32,
     target: f32,
     started: Instant,
@@ -228,6 +232,9 @@ fn main() -> Result<()> {
         net::spawn(hwnd.0 as isize, WM_NET, speed.clone());
         let lyrics_shared = Arc::new(Mutex::new(lyrics::Shared::default()));
         let lyric_requests = lyrics::spawn(hwnd.0 as isize, WM_LYRICS, lyrics_shared.clone());
+        let speed_enabled = read_setting("SpeedEnabled").map_or(true, |v| v != 0);
+        let notices = notify::spawn(hwnd.0 as isize, WM_NOTICE, speed_enabled);
+        notify::watch_pads(&notices, hwnd.0 as isize, WM_NOTICE);
 
         let app = App {
             hwnd,
@@ -242,7 +249,8 @@ fn main() -> Result<()> {
             notice: None,
             clipboard_enabled: read_setting("ClipboardEnabled").map_or(true, |v| v != 0),
             prayer_enabled: read_setting("PrayerEnabled").map_or(true, |v| v != 0),
-            speed_enabled: read_setting("SpeedEnabled").map_or(true, |v| v != 0),
+            speed_enabled,
+            notices,
             from: 0.0,
             target: 0.0,
             started: Instant::now(),
@@ -885,6 +893,10 @@ impl App {
             self.scroll = 0.0;
         }
         self.clipboard_sequence = clipboard::sequence();
+        self.notices.enabled.store(self.speed_enabled, std::sync::atomic::Ordering::Relaxed);
+        if !self.speed_enabled && self.notice.as_ref().is_some_and(|(text, _)| !text.starts_with("Waktu ")) {
+            self.notice = None;
+        }
         if !self.prayer_enabled && self.notice.as_ref().is_some_and(|(text, _)| text.starts_with("Waktu ")) {
             self.notice = None;
         }
@@ -1249,6 +1261,16 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 };
                 LRESULT(0)
             }
+            WM_NOTICE => {
+                with_app(|app| {
+                    let text = app.notices.pending.lock().unwrap().take();
+                    if let Some(text) = text.filter(|_| app.speed_enabled) {
+                        app.notice = Some((text, Instant::now()));
+                        app.render();
+                    }
+                });
+                LRESULT(0)
+            }
             WM_CITY_MENU => {
                 show_city_menu(hwnd);
                 LRESULT(0)
@@ -1393,7 +1415,7 @@ unsafe fn show_menu(hwnd: HWND) {
     let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("Fitur aktif"));
     let _ = AppendMenuW(menu, MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, w!("Halaman Clipboard"));
     let _ = AppendMenuW(menu, MF_STRING | checked(prayer_on), MENU_PRAYER, w!("Halaman Jadwal Salat (dan pengingat)"));
-    let _ = AppendMenuW(menu, MF_STRING | checked(speed_on), MENU_SPEED, w!("Kecepatan internet"));
+    let _ = AppendMenuW(menu, MF_STRING | checked(speed_on), MENU_SPEED, w!("Notifikasi dan kecepatan internet"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("Keluar"));
     let mut cursor = POINT::default();

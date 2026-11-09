@@ -32,9 +32,11 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 - Riwayat teks yang disalin selama aplikasi berjalan, maksimal 64 item; tidak pernah disimpan ke disk.
 - Pencarian, salin ulang, hapus, Jeda/Lanjut, dan Reset. Isi yang ditandai pengelola sandi tidak dicatat.
 
-**Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), dan Kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
+**Notifikasi**: notifikasi WhatsApp dan browser tampil 5 detik di notch kecil (tidak saat presentasi/aplikasi layar penuh), plus pemberitahuan controller tersambung/terputus. Perlu izin akses notifikasi Windows.
 
-Belum di-port: romaji dari Better Lyrics/Unison, editor tema kustom, notifikasi,
+**Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
+
+Belum di-port: romaji dari Better Lyrics/Unison, editor tema kustom,
 kunci game, dan memindah notch. Halaman peluncur game sengaja tidak di-port.
 
 ## Build
@@ -57,6 +59,7 @@ GitHub Actions (`.github/workflows/build.yml`) juga membangun exe di setiap push
 | `src/draw.rs` | Gambar notch dengan Direct2D/DirectWrite ke swap chain DirectComposition, cover dengan WIC |
 | `src/media.rs` | Windows Media Session: info lagu dan kontrol |
 | `src/net.rs` | Kecepatan internet |
+| `src/notify.rs` | Notifikasi WhatsApp/browser dan controller |
 | `src/prayer.rs` | Jadwal salat, daftar kota, hitung mundur, tata letak lintasan matahari |
 
 ## Lisensi
