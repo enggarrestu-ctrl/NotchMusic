@@ -1,0 +1,42 @@
+# Build NotchRust di runner Windows GitHub: tes, build release, lalu unggah exe + ikon sebagai artifact.
+name: build
+
+on:
+  push:
+    branches: [main, rust]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Tes
+        run: cargo test --release
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Kumpulkan hasil
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/NotchRust.exe, NotchMusic.ico, NotchMusic_Tray_Mint.ico dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NotchRust-windows-x64
+          path: dist/

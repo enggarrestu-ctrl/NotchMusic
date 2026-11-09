@@ -1,0 +1,3 @@
+// Ikon exe (juga ikon jendela lirik) dan manifest aplikasi.
+1 ICON "NotchMusic.ico"
+1 24 "app.manifest"
