@@ -3,7 +3,7 @@
 Widget *notch* di bagian atas layar Windows, port Rust dari [NotchMusic](https://github.com/enggarrestu-ctrl/NotchMusic) (WPF).
 Saat diam, notch menampilkan logo, jam, dan kecepatan internet. Saat di-hover, notch terbuka menjadi panel musik.
 
-Dibuat dengan Win32 + Direct2D lewat crate [`windows`](https://crates.io/crates/windows), tanpa runtime .NET.
+Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https://crates.io/crates/windows), tanpa runtime .NET. Notch ditampilkan lewat swap chain DirectComposition (langsung dari GPU, tersinkron refresh monitor; WARP bila tidak ada GPU), dan animasi digerakkan per vsync.
 
 ## Fitur (MVP)
 
@@ -48,7 +48,7 @@ GitHub Actions (`.github/workflows/build.yml`) juga membangun exe di setiap push
 | File | Isi |
 |---|---|
 | `src/main.rs` | Jendela notch, animasi, input mouse, menu, tray, autostart |
-| `src/draw.rs` | Gambar notch dengan Direct2D/DirectWrite, cover dengan WIC |
+| `src/draw.rs` | Gambar notch dengan Direct2D/DirectWrite ke swap chain DirectComposition, cover dengan WIC |
 | `src/media.rs` | Windows Media Session: info lagu dan kontrol |
 | `src/net.rs` | Kecepatan internet |
 

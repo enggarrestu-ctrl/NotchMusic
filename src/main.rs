@@ -54,7 +54,7 @@ const WM_LYRIC_CHOICES: u32 = WM_APP + 5;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 
-const TIMER_ANIMATION: usize = 1;
+// 1 dulu TIMER_ANIMATION; animasi kini digerakkan vsync di loop pesan.
 const TIMER_TICK: usize = 2;
 const TIMER_COLLAPSE: usize = 3;
 const TIMER_EQUALIZER: usize = 4;
@@ -92,6 +92,10 @@ struct App {
     origin: POINT,
     /// Posisi animasi saat ini (0 = kecil, 1 = terbuka), sudah di-ease.
     t: f32,
+    /// Ada animasi berjalan: loop pesan menggambar satu frame per vsync.
+    animating: bool,
+    /// Waktu langkah animasi terakhir.
+    stepped: Instant,
     from: f32,
     target: f32,
     started: Instant,
@@ -183,8 +187,9 @@ fn main() -> Result<()> {
         TASKBAR_CREATED.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
 
         // Selalu di atas, tidak muncul di Alt+Tab/taskbar, dan tidak mengambil fokus saat diklik.
+        // NOREDIRECTIONBITMAP: isi jendela sepenuhnya dari DirectComposition (lihat draw.rs).
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             w!("NotchRustWindow"),
             w!("NotchRust"),
             WS_POPUP,
@@ -211,6 +216,8 @@ fn main() -> Result<()> {
             dpi: 96.0,
             origin: POINT::default(),
             t: 0.0,
+            animating: false,
+            stepped: Instant::now(),
             from: 0.0,
             target: 0.0,
             started: Instant::now(),
@@ -266,10 +273,27 @@ fn main() -> Result<()> {
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetTimer(hwnd, TIMER_TICK, 1000, None);
 
+        // Saat ada animasi: proses semua pesan yang menunggu, lalu satu frame (Present menunggu vsync),
+        // jadi animasi berjalan tepat di refresh monitor dan input tetap responsif. Saat diam: tidur.
         let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
+        'messages: loop {
+            while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                if message.message == WM_QUIT {
+                    break 'messages;
+                }
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            if with_app(|app| app.animating).unwrap_or(false) {
+                let frame = Instant::now();
+                with_app(|app| app.step_animation());
+                // Pengaman bila Present tidak menunggu (jendela tersembunyi): jangan memutar CPU penuh.
+                if frame.elapsed().as_millis() < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(4));
+                }
+            } else {
+                let _ = WaitMessage();
+            }
         }
         APP.with(|cell| cell.borrow_mut().take());
         Ok(())
@@ -716,10 +740,11 @@ impl App {
         }
     }
 
-    fn start_animation_timer(&self) {
-        unsafe {
-            SetTimer(self.hwnd, TIMER_ANIMATION, 15, None);
+    fn start_animation_timer(&mut self) {
+        if !self.animating {
+            self.stepped = Instant::now();
         }
+        self.animating = true;
     }
 
     fn animate_to(&mut self, target: f32) {
@@ -748,7 +773,11 @@ impl App {
         if opening_done {
             self.t = self.target;
         }
-        let step = |current: f32, target: f32| if (target - current).abs() < 0.5 { target } else { current + (target - current) * 0.3 };
+        // Lebar notch kecil mendekati target 30% per 15 ms, dihitung dari waktu nyata (frame vsync tidak tetap).
+        let dt = self.stepped.elapsed().as_secs_f32().min(0.1);
+        self.stepped = Instant::now();
+        let k = 1.0 - 0.7f32.powf(dt / 0.015);
+        let step = |current: f32, target: f32| if (target - current).abs() < 0.5 { target } else { current + (target - current) * k };
         self.compact = (step(self.compact.0, self.compact_target.0), step(self.compact.1, self.compact_target.1));
         if let Some((_, _, started)) = self.page_transition {
             if started.elapsed().as_secs_f32() >= PAGE_SECONDS {
@@ -756,9 +785,7 @@ impl App {
             }
         }
         if opening_done && self.compact == self.compact_target && self.page_transition.is_none() {
-            unsafe {
-                let _ = KillTimer(self.hwnd, TIMER_ANIMATION);
-            }
+            self.animating = false;
         }
         self.render();
     }
@@ -1018,8 +1045,8 @@ impl App {
         self.hidden = hidden;
         unsafe {
             let _ = KillTimer(self.hwnd, TIMER_COLLAPSE);
-            let _ = KillTimer(self.hwnd, TIMER_ANIMATION);
         }
+        self.animating = false;
         self.t = 0.0;
         self.from = 0.0;
         self.target = 0.0;
@@ -1093,7 +1120,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_TIMER => {
                 match wparam.0 {
-                    TIMER_ANIMATION => with_app(|app| app.step_animation()),
+
                     TIMER_COLLAPSE => with_app(|app| {
                         let _ = KillTimer(hwnd, TIMER_COLLAPSE);
                         app.animate_to(0.0);

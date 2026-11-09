@@ -1,12 +1,13 @@
-// Menggambar notch dengan Direct2D ke DIB 32-bit (premultiplied alpha), lalu jendela layered
-// menampilkannya. Piksel transparan di luar bentuk notch otomatis tembus klik.
+// Menggambar notch dengan Direct2D ke swap chain DirectComposition (premultiplied alpha): GPU langsung
+// menampilkannya tersinkron refresh monitor, tanpa salinan per frame seperti jendela layered.
+// Klik tembus di luar notch lewat region jendela (SetWindowRgn) seukuran bentuk notch.
 // Semua koordinat dalam DIP; tata letak mengikuti MainWindow.xaml NotchMusic.
 
 use std::mem::ManuallyDrop;
 
 use windows::core::{w, Interface, Result};
 use windows::Foundation::Numerics::Matrix3x2;
-use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
+use windows::Win32::Foundation::{HMODULE, HWND, POINT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN,
     D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED,
@@ -14,13 +15,14 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush, ID2D1DCRenderTarget, ID2D1Factory, ID2D1Geometry,
+    D2D1CreateFactory, ID2D1Bitmap, ID2D1Brush, ID2D1DeviceContext, ID2D1Factory, ID2D1Factory1, ID2D1Geometry, ID2D1Image,
+    ID2D1RenderTarget, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
     ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
     D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL, D2D1_CAP_STYLE_ROUND,
     D2D1_COMBINE_MODE_EXCLUDE, D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_ELLIPSE,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LAYER_OPTIONS_NONE,
-    D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    D2D1_LAYER_PARAMETERS, D2D1_LINE_JOIN_ROUND, D2D1_ROUNDED_RECT,
     D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
     D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
@@ -33,19 +35,29 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
     DWRITE_WORD_WRAPPING_WRAP,
 };
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, AC_SRC_ALPHA,
-    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP,
-    HDC, HGDIOBJ,
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
 };
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
+};
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory2, IDXGIAdapter, IDXGIDevice, IDXGIDevice1, IDXGIFactory2, IDXGIOutput, IDXGISurface, IDXGISwapChain1,
+    DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+};
+use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
     WICBitmapDitherTypeNone, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeMedianCut,
     WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-use windows::Win32::UI::WindowsAndMessaging::{UpdateLayeredWindow, ULW_ALPHA};
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOZORDER};
 
 use crate::media::MediaState;
 
@@ -346,19 +358,33 @@ struct Icons {
     close: ID2D1PathGeometry,
 }
 
+/// Perangkat GPU + rantai tampilan DirectComposition. Dibuat ulang utuh bila GPU di-reset.
+struct Gpu {
+    d3d: ID3D11Device,
+    dxgi_factory: IDXGIFactory2,
+    dcomp: IDCompositionDevice,
+    context: ID2D1DeviceContext,
+    swap: Option<IDXGISwapChain1>,
+    /// Target komposisi milik jendela; disimpan agar visual tetap tampil.
+    composition: Option<(IDCompositionTarget, IDCompositionVisual)>,
+}
+
 pub struct Gfx {
     factory: ID2D1Factory,
     dwrite: IDWriteFactory,
     wic: IWICImagingFactory,
-    target: ID2D1DCRenderTarget,
+    gpu: Gpu,
+    /// DeviceContext yang sama, dilihat sebagai render target biasa agar kode gambar tetap sederhana.
+    target: ID2D1RenderTarget,
     formats: Formats,
     icons: Icons,
     round: ID2D1StrokeStyle,
-    memory_dc: HDC,
-    bitmap: HBITMAP,
-    old_bitmap: HGDIOBJ,
     width: i32,
     height: i32,
+    dpi: f32,
+    /// Posisi/ukuran jendela dan region klik terakhir, agar Win32 hanya dipanggil saat berubah.
+    placed: (i32, i32, i32, i32),
+    region: (i32, i32, i32, i32),
     cover: Option<(u64, ID2D1Bitmap)>,
     /// Batas slider terakhir yang digambar, untuk hit-test.
     pub track: (f32, f32),
@@ -427,90 +453,131 @@ impl Gfx {
                 },
                 None,
             )?;
-            let target = create_target(&factory)?;
+            let gpu = create_gpu(&factory)?;
+            let target = gpu.context.cast()?;
             Ok(Gfx {
                 factory,
                 dwrite,
                 wic,
+                gpu,
                 target,
                 formats,
                 icons,
                 round,
-                memory_dc: CreateCompatibleDC(None),
-                bitmap: HBITMAP::default(),
-                old_bitmap: HGDIOBJ::default(),
                 width: 0,
                 height: 0,
+                dpi: 96.0,
+                placed: (0, 0, 0, 0),
+                region: (0, 0, 0, 0),
                 cover: None,
                 track: seek_track(30.0, 30.0),
             })
         }
     }
 
-    /// Membuat ulang DIB sesuai ukuran jendela (piksel) dan DPI monitor.
+    /// Ukuran jendela (piksel) dan DPI monitor; swap chain menyesuaikan saat frame berikutnya.
     pub fn resize(&mut self, width: i32, height: i32, dpi: f32) -> Result<()> {
         unsafe {
-            if !self.bitmap.is_invalid() {
-                SelectObject(self.memory_dc, self.old_bitmap);
-                let _ = DeleteObject(self.bitmap);
-            }
-            let info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    biHeight: -height, // Top-down.
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut bits = std::ptr::null_mut();
-            self.bitmap = CreateDIBSection(self.memory_dc, &info, DIB_RGB_COLORS, &mut bits, None, 0)?;
-            self.old_bitmap = SelectObject(self.memory_dc, self.bitmap);
             self.width = width;
             self.height = height;
-            self.bind(dpi)
+            self.dpi = dpi;
+            if let Some(swap) = &self.gpu.swap {
+                self.gpu.context.SetTarget(None::<&ID2D1Image>);
+                swap.ResizeBuffers(2, width as u32, height as u32, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
+            }
+            Ok(())
         }
-    }
-
-    unsafe fn bind(&mut self, dpi: f32) -> Result<()> {
-        self.target.BindDC(self.memory_dc, &RECT { left: 0, top: 0, right: self.width, bottom: self.height })?;
-        self.target.SetDpi(dpi, dpi);
-        self.target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-        Ok(())
     }
 
     pub fn present(&mut self, hwnd: HWND, origin: POINT, view: &View, dpi: f32) -> Result<()> {
         unsafe {
-            if self.paint(view).is_err() {
-                // Target hilang (driver reset, dsb.): buat ulang lalu coba sekali lagi.
-                self.target = create_target(&self.factory)?;
+            self.dpi = dpi;
+            self.place(hwnd, origin, view);
+            if self.frame(hwnd, view).is_err() {
+                // GPU di-reset (driver diperbarui, dsb.): buat ulang semua perangkat lalu coba sekali lagi.
+                self.gpu = create_gpu(&self.factory)?;
+                self.target = self.gpu.context.cast()?;
                 self.cover = None;
-                self.bind(dpi)?;
-                self.paint(view)?;
+                self.frame(hwnd, view)?;
             }
-            let blend = BLENDFUNCTION {
-                BlendOp: AC_SRC_OVER as u8,
-                BlendFlags: 0,
-                SourceConstantAlpha: 255,
-                AlphaFormat: AC_SRC_ALPHA as u8,
-            };
-            UpdateLayeredWindow(
-                hwnd,
-                None,
-                Some(&origin),
-                Some(&SIZE { cx: self.width, cy: self.height }),
-                self.memory_dc,
-                Some(&POINT::default()),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            )
+            Ok(())
         }
     }
 
+    /// Jendela tetap seukuran notch terbuka; region dibatasi ke kotak bentuk notch saat ini,
+    /// jadi klik di area transparan tembus ke aplikasi di belakang.
+    unsafe fn place(&mut self, hwnd: HWND, origin: POINT, view: &View) {
+        let window = (origin.x, origin.y, self.width, self.height);
+        if window != self.placed {
+            let _ = SetWindowPos(hwnd, HWND_TOP, window.0, window.1, window.2, window.3, SWP_NOACTIVATE | SWP_NOZORDER);
+            self.placed = window;
+        }
+        let scale = self.dpi / 96.0;
+        let (x0, w, h) = shape_bounds(view.t, view.compact);
+        let region = (
+            (x0 * scale).floor() as i32,
+            0,
+            ((x0 + w) * scale).ceil() as i32,
+            (h * scale).ceil() as i32 + 1,
+        );
+        if region != self.region {
+            let handle = CreateRectRgn(region.0, region.1, region.2, region.3);
+            // Berhasil = region jadi milik Windows; redraw tidak perlu (isi digambar lewat komposisi).
+            if SetWindowRgn(hwnd, handle, false) == 0 {
+                let _ = DeleteObject(handle);
+            }
+            self.region = region;
+        }
+    }
+
+    unsafe fn frame(&mut self, hwnd: HWND, view: &View) -> Result<()> {
+        if self.width <= 0 || self.height <= 0 {
+            return Ok(());
+        }
+        let gpu = &mut self.gpu;
+        if gpu.swap.is_none() {
+            let desc = DXGI_SWAP_CHAIN_DESC1 {
+                Width: self.width as u32,
+                Height: self.height as u32,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                Stereo: false.into(),
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount: 2,
+                Scaling: DXGI_SCALING_STRETCH,
+                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                Flags: 0,
+            };
+            gpu.swap = Some(gpu.dxgi_factory.CreateSwapChainForComposition(&gpu.d3d, &desc, None::<&IDXGIOutput>)?);
+        }
+        let swap = gpu.swap.clone().unwrap();
+        if gpu.composition.is_none() {
+            let target = gpu.dcomp.CreateTargetForHwnd(hwnd, true)?;
+            let visual = gpu.dcomp.CreateVisual()?;
+            visual.SetContent(&swap)?;
+            target.SetRoot(&visual)?;
+            gpu.dcomp.Commit()?;
+            gpu.composition = Some((target, visual));
+        }
+        let surface: IDXGISurface = swap.GetBuffer(0)?;
+        let properties = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: self.dpi,
+            dpiY: self.dpi,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            colorContext: ManuallyDrop::new(None),
+        };
+        let bitmap = gpu.context.CreateBitmapFromDxgiSurface(&surface, Some(&properties))?;
+        gpu.context.SetTarget(&bitmap);
+        gpu.context.SetDpi(self.dpi, self.dpi);
+        gpu.context.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        let painted = self.paint(view);
+        self.gpu.context.SetTarget(None::<&ID2D1Image>);
+        painted?;
+        // Sinkron ke vsync: satu frame per refresh monitor, sekaligus menjadi pengatur tempo animasi.
+        swap.Present(1, DXGI_PRESENT(0)).ok()
+    }
     unsafe fn paint(&mut self, v: &View) -> Result<()> {
         self.update_cover(v.media);
         let rt = self.target.clone();
@@ -1049,32 +1116,24 @@ impl Gfx {
     }
 }
 
-impl Drop for Gfx {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.bitmap.is_invalid() {
-                SelectObject(self.memory_dc, self.old_bitmap);
-                let _ = DeleteObject(self.bitmap);
-            }
-            let _ = DeleteDC(self.memory_dc);
-        }
-    }
+/// Direct3D11 (GPU; WARP bila tidak ada GPU) -> Direct2D DeviceContext + DirectComposition.
+unsafe fn create_gpu(factory: &ID2D1Factory) -> Result<Gpu> {
+    let create = |driver: D3D_DRIVER_TYPE| -> Result<ID3D11Device> {
+        let mut device = None;
+        D3D11CreateDevice(None::<&IDXGIAdapter>, driver, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None,
+            D3D11_SDK_VERSION, Some(&mut device), None, None)?;
+        Ok(device.unwrap())
+    };
+    let d3d = create(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| create(D3D_DRIVER_TYPE_WARP))?;
+    let dxgi: IDXGIDevice = d3d.cast()?;
+    // Antrean satu frame: animasi mengikuti vsync tanpa tertinggal beberapa frame.
+    let _ = dxgi.cast::<IDXGIDevice1>()?.SetMaximumFrameLatency(1);
+    let device = factory.cast::<ID2D1Factory1>()?.CreateDevice(&dxgi)?;
+    let context = device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+    let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
+    let dxgi_factory: IDXGIFactory2 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
+    Ok(Gpu { d3d, dxgi_factory, dcomp, context, swap: None, composition: None })
 }
-
-unsafe fn create_target(factory: &ID2D1Factory) -> Result<ID2D1DCRenderTarget> {
-    factory.CreateDCRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
-        r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        pixelFormat: D2D1_PIXEL_FORMAT {
-            format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-        },
-        dpiX: 0.0,
-        dpiY: 0.0,
-        usage: D2D1_RENDER_TARGET_USAGE_NONE,
-        minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-    })
-}
-
 unsafe fn format(
     dwrite: &IDWriteFactory,
     size: f32,
