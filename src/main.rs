@@ -26,7 +26,7 @@ use windows::core::{w, Result, PCWSTR};
 use windows::Win32::Foundation::{
     BOOL, ERROR_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
@@ -40,7 +40,7 @@ use windows::Win32::UI::HiDpi::{
     MDT_EFFECTIVE_DPI,
 };
 use windows::Win32::System::DataExchange::{AddClipboardFormatListener, RemoveClipboardFormatListener};
-use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
@@ -83,6 +83,7 @@ const MENU_LYRICS_WINDOW: usize = 6;
 const MENU_CLIPBOARD: usize = 7;
 const MENU_PRAYER: usize = 8;
 const MENU_SPEED: usize = 9;
+const MENU_RESET_POSITION: usize = 10;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: PCWSTR = w!("NotchRust");
@@ -127,6 +128,13 @@ struct App {
     /// klik kiri dua kali membukanya. Dicatat saat masuk karena notch bisa jadi jendela depan setelah diklik.
     game_latched: bool,
     game_unlocked: bool,
+    /// Posisi notch: menempel di atas monitor atau mengambang; tengah notch (piksel layar) dan atas jendela.
+    docked: bool,
+    position: Option<(i32, i32)>,
+    /// Tombol kiri ditekan di area kosong (posisi kursor layar); diseret melewati ambang = pindah notch.
+    pressed: Option<POINT>,
+    /// Sedang diseret: jarak kursor ke kiri-atas notch kecil (piksel).
+    grab: Option<(i32, i32)>,
     from: f32,
     target: f32,
     started: Instant,
@@ -263,6 +271,10 @@ fn main() -> Result<()> {
             notices,
             game_latched: false,
             game_unlocked: false,
+            docked: read_setting("Docked").map_or(true, |v| v != 0),
+            position: read_setting("CenterX").zip(read_setting("TopY")).map(|(x, y)| (x as i32, y as i32)),
+            pressed: None,
+            grab: None,
             from: 0.0,
             target: 0.0,
             started: Instant::now(),
@@ -346,10 +358,13 @@ fn main() -> Result<()> {
 }
 
 impl App {
-    /// Letakkan notch di tengah atas monitor utama, sesuai DPI monitor tersebut.
+    /// Letakkan notch di posisi tersimpan (default: tengah atas monitor utama), sesuai DPI monitor tersebut.
     fn layout(&mut self) {
         unsafe {
-            let monitor = MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY);
+            let monitor = match self.position {
+                Some((x, y)) => MonitorFromPoint(POINT { x, y: y + 1 }, MONITOR_DEFAULTTONEAREST),
+                None => MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY),
+            };
             let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
             let _ = GetMonitorInfoW(monitor, &mut info);
             let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
@@ -359,7 +374,12 @@ impl App {
             let width = (EXPANDED_W * scale).ceil() as i32;
             let height = ((EXPANDED_H + draw::BOUNCE_ROOM) * scale).ceil() as i32;
             let screen = info.rcMonitor;
-            self.origin = POINT { x: screen.left + (screen.right - screen.left - width) / 2, y: screen.top };
+            let center = self.position.map_or((screen.left + screen.right) / 2, |p| p.0);
+            let top = if self.docked { screen.top } else { self.position.map_or(screen.top, |p| p.1) };
+            self.origin = POINT {
+                x: (center - width / 2).clamp(screen.left, (screen.right - width).max(screen.left)),
+                y: top.clamp(screen.top, (screen.bottom - height).max(screen.top)),
+            };
             let _ = self.gfx.resize(width, height, self.dpi);
         }
     }
@@ -461,6 +481,7 @@ impl App {
             notice: notice.as_deref(),
             arrows: self.pages().len() > 1,
             bounce: self.bounce,
+            docked: self.docked,
             speed: self.speed_enabled,
         };
         let _ = self.gfx.present(self.hwnd, self.origin, &view, self.dpi);
@@ -1034,7 +1055,107 @@ impl App {
         }
     }
 
+    // ---- Memindah notch -------------------------------------------------------------------
+
+    /// Tombol kiri di area kosong (bukan tombol/slider) bisa jadi awal menyeret notch.
+    fn on_press(&mut self, lparam: LPARAM) {
+        let (x, y) = self.to_dip(lparam);
+        if self.game_locked() || self.hit(x, y) != Hit::None {
+            return;
+        }
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+            SetCapture(self.hwnd);
+        }
+        self.pressed = Some(cursor);
+    }
+
+    /// Kembalikan true bila gerakan ini dipakai untuk menyeret (bukan hover biasa).
+    fn drag_to(&mut self) -> bool {
+        let Some(pressed) = self.pressed else { return false };
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+        }
+        let scale = self.dpi / 96.0;
+        if self.grab.is_none() {
+            let (dx, dy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+            if (cursor.x - pressed.x).abs() < dx && (cursor.y - pressed.y).abs() < dy {
+                return true;
+            }
+            // Mulai menyeret: notch langsung kembali kecil, titik yang dipegang tetap di bawah kursor.
+            unsafe {
+                let _ = KillTimer(self.hwnd, TIMER_COLLAPSE);
+            }
+            self.t = 0.0;
+            self.from = 0.0;
+            self.target = 0.0;
+            self.bounce = 0.0;
+            self.search_focused = false;
+            let (x0, w, h) = draw::shape_bounds(0.0, self.compact);
+            let left = self.origin.x + (x0 * scale) as i32;
+            let grab_x = (cursor.x - left).clamp(0, (w * scale) as i32);
+            let grab_y = (cursor.y - self.origin.y).clamp(0, (h * scale) as i32);
+            self.grab = Some((grab_x, grab_y));
+        }
+        let (grab_x, grab_y) = self.grab.unwrap();
+        let (x0, _, _) = draw::shape_bounds(0.0, self.compact);
+        unsafe {
+            let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let _ = GetMonitorInfoW(monitor, &mut info);
+            let screen = info.rcMonitor;
+            let width = (EXPANDED_W * scale).ceil() as i32;
+            let top = cursor.y - grab_y;
+            // Menempel bila dekat tepi atas; ambang lebih besar saat sudah menempel agar tidak mudah lepas.
+            self.docked = top <= screen.top + ((if self.docked { 12.0 } else { 6.0 }) * scale) as i32;
+            let left = cursor.x - grab_x - (x0 * scale) as i32;
+            self.origin = POINT {
+                x: left.clamp(screen.left, (screen.right - width).max(screen.left)),
+                y: if self.docked { screen.top } else { top.clamp(screen.top, screen.bottom - (EXPANDED_H * scale) as i32) },
+            };
+        }
+        self.render();
+        true
+    }
+
+    /// Lepas tombol: bila tadi menyeret, simpan posisi dan susun ulang (DPI monitor baru); kembalikan true.
+    fn finish_drag(&mut self) -> bool {
+        self.pressed = None;
+        let dragged = self.grab.take().is_some();
+        unsafe {
+            if GetCapture() == self.hwnd {
+                let _ = ReleaseCapture();
+            }
+        }
+        if dragged {
+            let width = (EXPANDED_W * self.dpi / 96.0).ceil() as i32;
+            let position = (self.origin.x + width / 2, self.origin.y);
+            self.position = Some(position);
+            write_setting("Docked", self.docked as u32);
+            write_setting("CenterX", position.0 as u32);
+            write_setting("TopY", position.1 as u32);
+            self.layout();
+            self.render();
+        }
+        dragged
+    }
+
+    fn reset_position(&mut self) {
+        self.position = None;
+        self.docked = true;
+        write_setting("Docked", 1);
+        delete_setting("CenterX");
+        delete_setting("TopY");
+        self.layout();
+        self.render();
+    }
+
     fn on_mouse_move(&mut self, lparam: LPARAM) {
+        if self.drag_to() {
+            return;
+        }
         unsafe {
             let _ = KillTimer(self.hwnd, TIMER_COLLAPSE);
             if !self.tracking {
@@ -1266,8 +1387,16 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 with_app(|app| app.on_mouse_leave());
                 LRESULT(0)
             }
+            WM_LBUTTONDOWN => {
+                with_app(|app| app.on_press(lparam));
+                LRESULT(0)
+            }
             WM_LBUTTONUP => {
-                with_app(|app| if !app.game_locked() { app.on_click(lparam) });
+                with_app(|app| if !app.finish_drag() && !app.game_locked() { app.on_click(lparam) });
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED => {
+                with_app(|app| app.finish_drag());
                 LRESULT(0)
             }
             WM_LBUTTONDBLCLK => {
@@ -1452,6 +1581,7 @@ unsafe fn show_menu(hwnd: HWND) {
     let _ = AppendMenuW(menu, MF_STRING, MENU_REFRESH_LYRICS, w!("Cari ulang lirik"));
     let _ = AppendMenuW(menu, MF_STRING | checked(offline), MENU_OFFLINE, w!("Lirik offline saja"));
     let _ = AppendMenuW(menu, MF_STRING | checked(autostart), MENU_AUTOSTART, w!("Jalan otomatis saat Windows mulai"));
+    let _ = AppendMenuW(menu, MF_STRING, MENU_RESET_POSITION, w!("Reset posisi ke atas tengah layar"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("Fitur aktif"));
     let _ = AppendMenuW(menu, MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, w!("Halaman Clipboard"));
@@ -1477,6 +1607,9 @@ unsafe fn show_menu(hwnd: HWND) {
             with_app(|app| app.set_hidden(!hidden));
         }
         MENU_AUTOSTART => set_autostart(!autostart),
+        MENU_RESET_POSITION => {
+            with_app(|app| app.reset_position());
+        }
         MENU_CLIPBOARD | MENU_PRAYER | MENU_SPEED => {
             with_app(|app| {
                 let (name, flag) = match chosen.0 as usize {
@@ -1620,6 +1753,13 @@ fn read_setting(name: &str) -> Option<u32> {
         )
     };
     status.is_ok().then_some(value)
+}
+
+fn delete_setting(name: &str) {
+    let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, SETTINGS_KEY, PCWSTR(name.as_ptr()));
+    }
 }
 
 fn write_setting(name: &str, value: u32) {

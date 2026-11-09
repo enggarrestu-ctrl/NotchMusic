@@ -189,6 +189,20 @@ pub struct View<'a> {
     pub speed: bool,
     /// Pantulan pegas saat membuka: tambahan tinggi sebagai pecahan dari selisih tinggi kecil -> terbuka.
     pub bounce: f32,
+    /// Menempel di atas layar (sudut atas melengkung ke luar) atau mengambang (bulat di semua sisi).
+    pub docked: bool,
+}
+
+/// Ukuran sudut bentuk notch (sama dengan NotchSurface.UpdateOutline): flare atas saat menempel,
+/// sudut atas membulat saat mengambang, sudut bawah membulat.
+fn corners(w: f32, h: f32, docked: bool) -> (f32, f32, f32) {
+    let cut = if docked { 1.0 } else { 0.0 };
+    let flare = FLARE.min(w / 6.0) * cut;
+    let inner = w - 2.0 * flare;
+    let radius = 24f32.min((inner / 2.0).min(h / 2.0));
+    let upper = radius * (1.0 - cut);
+    let lower = (h - upper - flare).min((inner / 2.0).min(radius * (1.0 + cut)));
+    (flare, upper, lower)
 }
 
 /// Ruang di bawah notch terbuka untuk pantulan pegas (jendela sedikit lebih tinggi dari EXPANDED_H).
@@ -673,7 +687,7 @@ impl Gfx {
 
         let theme = v.theme;
         let (x0, w, h) = view_bounds(v);
-        let shape = self.notch_shape(x0, w, h)?;
+        let shape = self.notch_shape(x0, w, h, v.docked)?;
         rt.FillGeometry(&shape, &self.brush(theme.background, 1.0)?, None::<&ID2D1Brush>);
 
         // Garis tepi dan garis progres dipotong oleh bentuk notch, seperti clip di NotchSurface.
@@ -697,7 +711,7 @@ impl Gfx {
         let fraction = if duration > 0.0 { (elapsed / duration) as f32 } else { 0.0 };
         let compact_alpha = 1.0 - (v.t * 2.5).min(1.0);
         if compact_alpha > 0.0 && media.active && duration > 0.0 {
-            self.paint_edge_progress(x0, w, h, fraction, &self.brush(theme.accent, compact_alpha)?)?;
+            self.paint_edge_progress(x0, w, h, v.docked, fraction, &self.brush(theme.accent, compact_alpha)?)?;
         }
         rt.PopLayer();
 
@@ -750,46 +764,45 @@ impl Gfx {
         rt.EndDraw(None, None)
     }
 
-    /// Bentuk NotchSurface saat menempel di atas layar: sudut atas melengkung ke luar (flare),
-    /// sudut bawah membulat.
-    unsafe fn notch_shape(&self, x: f32, w: f32, h: f32) -> Result<ID2D1PathGeometry> {
+    /// Bentuk NotchSurface: menempel = sudut atas melengkung ke luar (flare); mengambang = bulat di semua sisi.
+    /// Satu Bezier per sudut atas: cembung (upper) saat mengambang, cekung (flare) saat menempel.
+    unsafe fn notch_shape(&self, x: f32, w: f32, h: f32, docked: bool) -> Result<ID2D1PathGeometry> {
         let (y, r, d) = (0.0, x + w, h);
-        let flare = FLARE.min(w / 6.0);
+        let (flare, upper, lower) = corners(w, h, docked);
         let (left, right) = (x + flare, r - flare);
-        let radius = 24f32.min(((right - left) / 2.0).min(h / 2.0));
-        let lower = (h - flare).min(((right - left) / 2.0).min(radius * 2.0));
         let k = KAPPA;
         let geometry = self.factory.CreatePathGeometry()?;
         let sink = geometry.Open()?;
-        sink.BeginFigure(pt(x, y), D2D1_FIGURE_BEGIN_FILLED);
-        sink.AddLine(pt(r, y));
-        sink.AddBezier(&bezier((r - k * flare, y), (right, y + flare - k * flare), (right, y + flare)));
+        sink.BeginFigure(pt(x + upper, y), D2D1_FIGURE_BEGIN_FILLED);
+        sink.AddLine(pt(r - upper, y));
+        sink.AddBezier(&bezier((r - upper + k * upper - k * flare, y), (right, y + upper - k * upper + flare - k * flare), (right, y + upper + flare)));
         sink.AddLine(pt(right, d - lower));
         sink.AddBezier(&bezier((right, d - lower + k * lower), (right - lower + k * lower, d), (right - lower, d)));
         sink.AddLine(pt(left + lower, d));
         sink.AddBezier(&bezier((left + lower - k * lower, d), (left, d - lower + k * lower), (left, d - lower)));
-        sink.AddLine(pt(left, y + flare));
-        sink.AddBezier(&bezier((left, y + flare - k * flare), (x + k * flare, y), (x, y)));
+        sink.AddLine(pt(left, y + upper + flare));
+        sink.AddBezier(&bezier((left, y + upper - k * upper + flare - k * flare), (x + upper - k * upper + k * flare, y), (x + upper, y)));
         sink.EndFigure(D2D1_FIGURE_END_CLOSED);
         sink.Close()?;
         Ok(geometry)
     }
 
-    /// Garis progres di tepi notch kecil: dari tengah bawah naik ke kiri dan kanan sekaligus,
-    /// penuh tepat di ujung lengkung atas saat lagu selesai.
-    unsafe fn paint_edge_progress(&self, x: f32, w: f32, h: f32, fraction: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
+    /// Garis progres di tepi notch kecil: dari tengah bawah naik ke kiri dan kanan sekaligus. Menempel: penuh di
+    /// ujung lengkung atas (tepi atas menyatu dengan layar). Mengambang: penuh melingkar sampai tengah atas.
+    unsafe fn paint_edge_progress(&self, x: f32, w: f32, h: f32, docked: bool, fraction: f32, brush: &ID2D1SolidColorBrush) -> Result<()> {
         let (y, r, d) = (0.0, x + w, h);
-        let flare = FLARE.min(w / 6.0);
-        let (left, right) = (x + flare, r - flare);
-        let radius = 24f32.min(((right - left) / 2.0).min(h / 2.0));
-        let lower = (h - flare).min(((right - left) / 2.0).min(radius * 2.0));
+        let (flare, upper, lower) = corners(w, h, docked);
+        let right = r - flare;
         let center = (x + r) / 2.0;
         let k = KAPPA;
         // Separuh kanan sebagai titik-titik (Bezier disampel), lalu dicerminkan untuk kiri.
         let mut points = vec![(center, d), (right - lower, d)];
         sample_bezier(&mut points, (right - lower, d), (right - lower + k * lower, d), (right, d - lower + k * lower), (right, d - lower));
-        points.push((right, y + flare));
-        sample_bezier(&mut points, (right, y + flare), (right, y + flare - k * flare), (r - k * flare, y), (r, y));
+        points.push((right, y + upper + flare));
+        sample_bezier(&mut points, (right, y + upper + flare), (right, y + upper - k * upper + flare - k * flare), (r - upper + k * upper - k * flare, y), (r - upper, y));
+        if !docked {
+            points.push((center, y));
+        }
         let total: f32 = points.windows(2).map(|p| dist(p[0], p[1])).sum();
         let mut remaining = total * fraction.clamp(0.0, 1.0);
         if remaining <= 0.0 {
@@ -1622,6 +1635,14 @@ fn color(rgb: u32, a: f32) -> D2D1_COLOR_F {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docked_flares_top_and_floating_rounds_all_corners() {
+        let (flare, upper, lower) = corners(240.0, 34.0, true);
+        assert!(flare > 0.0 && upper == 0.0 && lower > 0.0);
+        let (flare, upper, lower) = corners(240.0, 34.0, false);
+        assert!(flare == 0.0 && upper > 0.0 && upper == lower);
+    }
 
     #[test]
     fn clock_text_formats_minutes_and_hours() {
