@@ -76,6 +76,9 @@ const MENU_SHOW: usize = 3;
 const MENU_OFFLINE: usize = 4;
 const MENU_REFRESH_LYRICS: usize = 5;
 const MENU_LYRICS_WINDOW: usize = 6;
+const MENU_CLIPBOARD: usize = 7;
+const MENU_PRAYER: usize = 8;
+const MENU_SPEED: usize = 9;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: PCWSTR = w!("NotchRust");
@@ -108,6 +111,10 @@ struct App {
     prayer_minute: i64,
     /// Pengingat singkat di notch kecil dan kapan mulai tampil.
     notice: Option<(String, Instant)>,
+    /// Fitur yang bisa dimatikan dari menu klik kanan.
+    clipboard_enabled: bool,
+    prayer_enabled: bool,
+    speed_enabled: bool,
     from: f32,
     target: f32,
     started: Instant,
@@ -233,6 +240,9 @@ fn main() -> Result<()> {
             prayer_city: read_setting("PrayerCity").map(|v| v as usize).filter(|&i| i < prayer::CITIES.len()).unwrap_or(prayer::JAKARTA),
             prayer_minute: -1,
             notice: None,
+            clipboard_enabled: read_setting("ClipboardEnabled").map_or(true, |v| v != 0),
+            prayer_enabled: read_setting("PrayerEnabled").map_or(true, |v| v != 0),
+            speed_enabled: read_setting("SpeedEnabled").map_or(true, |v| v != 0),
             from: 0.0,
             target: 0.0,
             started: Instant::now(),
@@ -277,7 +287,7 @@ fn main() -> Result<()> {
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         with_app(|app| {
             app.layout();
-            app.render();
+            app.apply_features(); // Halaman tersimpan yang fiturnya mati kembali ke Musik; lalu gambar.
             app.add_tray();
             app.apply_pin();
             app.clipboard_listening = AddClipboardFormatListener(app.hwnd).is_ok();
@@ -360,7 +370,7 @@ impl App {
                 (self.gfx.compact_lyric_width(line) + draw::COMPACT_CHROME).clamp(COMPACT_W, EXPANDED_W),
                 draw::MUSIC_H,
             ),
-            (None, None) => (COMPACT_W, COMPACT_H),
+            (None, None) => (draw::idle_width(self.speed_enabled), COMPACT_H),
         };
         if self.compact != self.compact_target {
             self.start_animation_timer();
@@ -430,6 +440,8 @@ impl App {
                 countdown: &countdown,
             },
             notice: notice.as_deref(),
+            arrows: self.pages().len() > 1,
+            speed: self.speed_enabled,
         };
         let _ = self.gfx.present(self.hwnd, self.origin, &view, self.dpi);
     }
@@ -827,6 +839,9 @@ impl App {
         if self.notice.as_ref().is_some_and(|(_, shown)| shown.elapsed().as_secs_f32() >= NOTICE_SECONDS) {
             self.notice = None;
         }
+        if !self.prayer_enabled {
+            return;
+        }
         let city = &prayer::CITIES[self.prayer_city];
         let (day, now) = city.now();
         let minute = day * 1440 + now.floor() as i64;
@@ -843,10 +858,47 @@ impl App {
         }
     }
 
+    /// Halaman yang aktif, urut: musik, clipboard, jadwal salat.
+    fn pages(&self) -> Vec<usize> {
+        let mut pages = vec![draw::PAGE_MUSIC];
+        if self.clipboard_enabled {
+            pages.push(draw::PAGE_CLIPBOARD);
+        }
+        if self.prayer_enabled {
+            pages.push(draw::PAGE_PRAYER);
+        }
+        pages
+    }
+
+    /// Setelah fitur dinyalakan/dimatikan: halaman yang hilang kembali ke Musik.
+    fn apply_features(&mut self) {
+        if !self.pages().contains(&self.page) {
+            self.page = draw::PAGE_MUSIC;
+            self.page_transition = None;
+            write_setting("Page", self.page as u32);
+        }
+        if !self.clipboard_enabled {
+            // Riwayat dibuang saat fitur dimatikan; isi clipboard saat ini tidak diimpor saat dinyalakan lagi.
+            self.history.clear();
+            self.search.clear();
+            self.search_focused = false;
+            self.scroll = 0.0;
+        }
+        self.clipboard_sequence = clipboard::sequence();
+        if !self.prayer_enabled && self.notice.as_ref().is_some_and(|(text, _)| text.starts_with("Waktu ")) {
+            self.notice = None;
+        }
+        self.render();
+    }
+
     fn navigate_page(&mut self, direction: i32) {
-        let count = draw::PAGE_COUNT as i32;
+        let pages = self.pages();
+        if pages.len() < 2 {
+            return;
+        }
         let from = self.page;
-        self.page = ((self.page as i32 + direction).rem_euclid(count)) as usize;
+        let index = pages.iter().position(|&p| p == from).map_or(0, |i| (i as i32 + direction).rem_euclid(pages.len() as i32) as usize);
+        self.page = pages[index];
         self.page_transition = Some((from, direction.signum() as f32, Instant::now()));
         self.search_focused = false;
         write_setting("Page", self.page as u32);
@@ -857,7 +909,7 @@ impl App {
     // ---- Clipboard -------------------------------------------------------------------------
 
     fn clipboard_changed(&mut self) {
-        if !self.recording || clipboard::sequence() == self.clipboard_sequence {
+        if !self.clipboard_enabled || !self.recording || clipboard::sequence() == self.clipboard_sequence {
             return;
         }
         match clipboard::read(self.hwnd) {
@@ -1327,6 +1379,8 @@ unsafe fn show_city_menu(hwnd: HWND) {
 unsafe fn show_menu(hwnd: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let (hidden, offline) = with_app(|app| (app.hidden, app.offline)).unwrap_or((false, false));
+    let (clipboard_on, prayer_on, speed_on) =
+        with_app(|app| (app.clipboard_enabled, app.prayer_enabled, app.speed_enabled)).unwrap_or((true, true, true));
     let autostart = autostart_enabled();
     let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
     let show_label = if hidden { w!("Tampilkan notch") } else { w!("Minimalkan ke tray") };
@@ -1335,6 +1389,11 @@ unsafe fn show_menu(hwnd: HWND) {
     let _ = AppendMenuW(menu, MF_STRING, MENU_REFRESH_LYRICS, w!("Cari ulang lirik"));
     let _ = AppendMenuW(menu, MF_STRING | checked(offline), MENU_OFFLINE, w!("Lirik offline saja"));
     let _ = AppendMenuW(menu, MF_STRING | checked(autostart), MENU_AUTOSTART, w!("Jalan otomatis saat Windows mulai"));
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("Fitur aktif"));
+    let _ = AppendMenuW(menu, MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, w!("Halaman Clipboard"));
+    let _ = AppendMenuW(menu, MF_STRING | checked(prayer_on), MENU_PRAYER, w!("Halaman Jadwal Salat (dan pengingat)"));
+    let _ = AppendMenuW(menu, MF_STRING | checked(speed_on), MENU_SPEED, w!("Kecepatan internet"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("Keluar"));
     let mut cursor = POINT::default();
@@ -1355,6 +1414,18 @@ unsafe fn show_menu(hwnd: HWND) {
             with_app(|app| app.set_hidden(!hidden));
         }
         MENU_AUTOSTART => set_autostart(!autostart),
+        MENU_CLIPBOARD | MENU_PRAYER | MENU_SPEED => {
+            with_app(|app| {
+                let (name, flag) = match chosen.0 as usize {
+                    MENU_CLIPBOARD => ("ClipboardEnabled", &mut app.clipboard_enabled),
+                    MENU_PRAYER => ("PrayerEnabled", &mut app.prayer_enabled),
+                    _ => ("SpeedEnabled", &mut app.speed_enabled),
+                };
+                *flag = !*flag;
+                write_setting(name, *flag as u32);
+                app.apply_features();
+            });
+        }
         MENU_OFFLINE => {
             with_app(|app| {
                 // Mode offline: tidak ada permintaan ke LRCLIB/Deezer, hanya lirik tersimpan.

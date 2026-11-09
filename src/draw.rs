@@ -183,6 +183,15 @@ pub struct View<'a> {
     pub prayer: PrayerView<'a>,
     /// Pengingat singkat di notch kecil (mis. waktu salat), menggantikan jam/lirik.
     pub notice: Option<&'a str>,
+    /// Panah halaman tampil hanya bila ada lebih dari satu halaman aktif.
+    pub arrows: bool,
+    /// Angka kecepatan internet di notch kecil (fitur bisa dimatikan).
+    pub speed: bool,
+}
+
+/// Lebar notch kecil saat diam: jam di tengah, logo kiri, kecepatan internet kanan (atau tanpa kecepatan).
+pub fn idle_width(speed: bool) -> f32 {
+    if speed { COMPACT_W } else { 150.0 }
 }
 
 // Halaman salat: judul + kota 24 | kartu berikutnya 128 | 6 | lintasan matahari 388 x 86.
@@ -811,6 +820,9 @@ impl Gfx {
         self.text(v.clock, &self.formats.compact_clock, rect(CENTER_X - half - 4.0, 4.0, CENTER_X + half + 4.0, 28.0), &white);
         let logo_right = CENTER_X - half - 8.0;
         self.fill_icon_box(&self.icons.logo, logo_right - 14.0, cy - 7.0, 14.0, 100.0, &self.brush(LOGO_COLOR, alpha)?, Matrix3x2::identity());
+        if !v.speed {
+            return Ok(());
+        }
         let speed_left = CENTER_X + half + 8.0;
         self.text(&format!("↓ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
         self.text(&format!("↑ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
@@ -840,6 +852,9 @@ impl Gfx {
         let theme = v.theme;
         self.fill_icon_box(&self.icons.logo, ARROW_LEFT_X - 8.0, 14.0, 16.0, 100.0, &self.brush(LOGO_COLOR, alpha)?, base);
         let ink = self.brush(theme.ink, alpha)?;
+        if !v.arrows {
+            return Ok(());
+        }
         for (x, icon, hit) in [(ARROW_LEFT_X, &self.icons.arrow_left, Hit::PageLeft), (ARROW_RIGHT_X, &self.icons.arrow_right, Hit::PageRight)] {
             self.button_circle(x, ARROW_Y, 12.0, theme, v.hover == hit, alpha)?;
             self.stroke_icon(icon, x, ARROW_Y, 12.0, 1.8, &ink, base);
