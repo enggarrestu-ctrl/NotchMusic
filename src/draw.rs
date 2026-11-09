@@ -1128,6 +1128,7 @@ impl Gfx {
         self.text(&time, &self.formats.card_time, rect(left + name_w + gap, ct + 26.0, left + name_w + gap + time_w + 2.0, ct + 56.0), &ink);
         rt.SetTransform(&base);
         // Hitung mundur panjang ("7 jam 34 menit lagi · WIB") turun ke baris kedua, tidak dipotong.
+        self.text(&format!("{} · {}", p.countdown, p.zone), &self.formats.card_note, rect(cl + 12.0, ct + 56.0, cr - 8.0, cb - 6.0), &ink);
 
         // Lintasan matahari.
         let sky = crate::prayer::Sky { times: &p.times, width: SKY_W, height: SKY_H };
