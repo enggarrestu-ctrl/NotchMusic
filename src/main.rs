@@ -5,6 +5,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod clipboard;
+mod desktop;
 mod draw;
 mod http;
 mod lyrics;
@@ -119,6 +120,10 @@ struct App {
     /// "Notifikasi dan kecepatan internet".
     speed_enabled: bool,
     notices: std::sync::Arc<notify::Shared>,
+    /// Kunci game: saat mouse masuk ada game layar penuh -> notch tidak terbuka/menu tidak muncul,
+    /// klik kiri dua kali membukanya. Dicatat saat masuk karena notch bisa jadi jendela depan setelah diklik.
+    game_latched: bool,
+    game_unlocked: bool,
     from: f32,
     target: f32,
     started: Instant,
@@ -200,6 +205,7 @@ fn main() -> Result<()> {
         let instance: HINSTANCE = module.into();
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_DBLCLKS, // Klik kiri dua kali membuka kunci game.
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
@@ -251,6 +257,8 @@ fn main() -> Result<()> {
             prayer_enabled: read_setting("PrayerEnabled").map_or(true, |v| v != 0),
             speed_enabled,
             notices,
+            game_latched: false,
+            game_unlocked: false,
             from: 0.0,
             target: 0.0,
             started: Instant::now(),
@@ -1005,10 +1013,23 @@ impl App {
         (x / scale, y / scale)
     }
 
+    fn game_locked(&self) -> bool {
+        self.game_latched && !self.game_unlocked
+    }
+
+    /// Klik kiri dua kali saat terkunci: notch terbuka dan bisa dipakai sampai menutup lagi.
+    fn unlock_game(&mut self) {
+        if self.game_locked() {
+            self.game_unlocked = true;
+            self.animate_to(1.0);
+        }
+    }
+
     fn on_mouse_move(&mut self, lparam: LPARAM) {
         unsafe {
             let _ = KillTimer(self.hwnd, TIMER_COLLAPSE);
             if !self.tracking {
+                self.game_latched = desktop::fullscreen_app_on_monitor(self.hwnd);
                 let mut track = TRACKMOUSEEVENT {
                     cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                     dwFlags: TME_LEAVE,
@@ -1019,6 +1040,9 @@ impl App {
             }
         }
         let (x, y) = self.to_dip(lparam);
+        if self.game_locked() {
+            return; // Terkunci saat game layar penuh: tidak terbuka, tidak ada efek hover.
+        }
         if draw::inside_shape(self.t, self.compact, x, y) {
             self.animate_to(1.0);
         }
@@ -1234,19 +1258,27 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                with_app(|app| app.on_click(lparam));
+                with_app(|app| if !app.game_locked() { app.on_click(lparam) });
+                LRESULT(0)
+            }
+            WM_LBUTTONDBLCLK => {
+                with_app(|app| app.unlock_game());
                 LRESULT(0)
             }
             WM_RBUTTONUP => {
-                show_menu(hwnd);
+                if !with_app(|app| app.game_locked()).unwrap_or(false) {
+                    show_menu(hwnd);
+                }
                 LRESULT(0)
             }
+            // Game tidak kehilangan fokus/ter-minimize saat notch diklik.
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_TIMER => {
                 match wparam.0 {
 
                     TIMER_COLLAPSE => with_app(|app| {
                         let _ = KillTimer(hwnd, TIMER_COLLAPSE);
+                        app.game_unlocked = false;
                         app.animate_to(0.0);
                     }),
                     TIMER_CLIPBOARD_RETRY => with_app(|app| {

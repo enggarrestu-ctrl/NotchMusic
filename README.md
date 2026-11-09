@@ -34,6 +34,8 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 
 **Notifikasi**: notifikasi WhatsApp dan browser tampil 5 detik di notch kecil (tidak saat presentasi/aplikasi layar penuh), plus pemberitahuan controller tersambung/terputus. Perlu izin akses notifikasi Windows.
 
+**Kunci game**: saat ada game/aplikasi layar penuh di monitor notch, notch tidak terbuka saat di-hover dan menu klik kanan tidak muncul; klik kiri dua kali untuk membukanya.
+
 **Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
 
 Belum di-port: romaji dari Better Lyrics/Unison, editor tema kustom,
