@@ -187,6 +187,17 @@ pub struct View<'a> {
     pub arrows: bool,
     /// Angka kecepatan internet di notch kecil (fitur bisa dimatikan).
     pub speed: bool,
+    /// Pantulan pegas saat membuka: tambahan tinggi sebagai pecahan dari selisih tinggi kecil -> terbuka.
+    pub bounce: f32,
+}
+
+/// Ruang di bawah notch terbuka untuk pantulan pegas (jendela sedikit lebih tinggi dari EXPANDED_H).
+pub const BOUNCE_ROOM: f32 = 12.0;
+
+/// Bentuk notch saat ini termasuk pantulan (hanya ke bawah; lebarnya sudah memenuhi jendela).
+pub fn view_bounds(v: &View) -> (f32, f32, f32) {
+    let (x0, w, h) = shape_bounds(v.t, v.compact);
+    (x0, w, (h + v.bounce * (EXPANDED_H - v.compact.1)).min(EXPANDED_H + BOUNCE_ROOM))
 }
 
 /// Lebar notch kecil saat diam: jam di tengah, logo kiri, kecepatan internet kanan (atau tanpa kecepatan).
@@ -222,7 +233,6 @@ const THEME_X: f32 = 99.0;
 const MINIMIZE_X: f32 = 124.0;
 const LYRICS_BUTTON_X: f32 = 343.0;
 const PAGE_RIGHT: f32 = 585.0;
-const PAGE_WIDTH: f32 = PAGE_RIGHT - PAGE_LEFT;
 const ARROW_Y: f32 = 79.0;
 
 // Halaman clipboard: judul 22 | cari 28 | daftar * | status 16.
@@ -589,7 +599,7 @@ impl Gfx {
             self.placed = window;
         }
         let scale = self.dpi / 96.0;
-        let (x0, w, h) = shape_bounds(view.t, view.compact);
+        let (x0, w, h) = view_bounds(view);
         let region = (
             (x0 * scale).floor() as i32,
             0,
@@ -662,7 +672,7 @@ impl Gfx {
         rt.Clear(Some(&color(0, 0.0)));
 
         let theme = v.theme;
-        let (x0, w, h) = shape_bounds(v.t, v.compact);
+        let (x0, w, h) = view_bounds(v);
         let shape = self.notch_shape(x0, w, h)?;
         rt.FillGeometry(&shape, &self.brush(theme.background, 1.0)?, None::<&ID2D1Brush>);
 
@@ -711,11 +721,12 @@ impl Gfx {
             self.paint_deck(v, alpha, base)?;
             // Halaman bergeser di dalam viewport 522 DIP; panah dan logo tetap di tempat.
             rt.PushAxisAlignedClip(&rect(PAGE_LEFT, 0.0, PAGE_RIGHT, EXPANDED_H), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            // Shared axis: geser pendek 48 DIP + ganti pudar (geser selebar halaman terlihat patah bila frame telat).
             let pages: Vec<(usize, f32, f32)> = match v.transition {
-                Some((from, direction, p)) => vec![
-                    (from, -direction * PAGE_WIDTH * p, alpha * (1.0 - p)),
-                    (v.page, direction * PAGE_WIDTH * (1.0 - p), alpha * p),
-                ],
+                Some((from, direction, p)) => {
+                    let (out_dx, out_alpha, in_dx, in_alpha) = crate::motion::shared_axis(p, direction, 48.0);
+                    vec![(from, out_dx, alpha * out_alpha), (v.page, in_dx, alpha * in_alpha)]
+                }
                 None => vec![(v.page, 0.0, alpha)],
             };
             for (page, dx, page_alpha) in pages {

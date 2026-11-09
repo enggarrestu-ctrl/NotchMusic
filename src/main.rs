@@ -11,6 +11,7 @@ mod http;
 mod lyrics;
 mod lyrics_window;
 mod media;
+mod motion;
 mod net;
 mod notify;
 mod prayer;
@@ -69,8 +70,8 @@ const TIMER_COLLAPSE: usize = 3;
 const TIMER_EQUALIZER: usize = 4;
 const TIMER_CLIPBOARD_RETRY: usize = 5;
 
-const ANIMATION_SECONDS: f32 = 0.24;
-const PAGE_SECONDS: f32 = 0.24;
+
+
 const COLLAPSE_DELAY_MS: u32 = 350;
 
 const MENU_AUTOSTART: usize = 1;
@@ -108,6 +109,8 @@ struct App {
     animating: bool,
     /// Waktu langkah animasi terakhir.
     stepped: Instant,
+    /// Pantulan pegas saat membuka (lihat draw::View::bounce).
+    bounce: f32,
     /// Kota jadwal salat (indeks prayer::CITIES).
     prayer_city: usize,
     /// Menit terakhir yang sudah dicek untuk pengingat salat.
@@ -250,6 +253,7 @@ fn main() -> Result<()> {
             t: 0.0,
             animating: false,
             stepped: Instant::now(),
+            bounce: 0.0,
             prayer_city: read_setting("PrayerCity").map(|v| v as usize).filter(|&i| i < prayer::CITIES.len()).unwrap_or(prayer::JAKARTA),
             prayer_minute: -1,
             notice: None,
@@ -353,7 +357,7 @@ impl App {
             self.dpi = dpi_x as f32;
             let scale = self.dpi / 96.0;
             let width = (EXPANDED_W * scale).ceil() as i32;
-            let height = (EXPANDED_H * scale).ceil() as i32;
+            let height = ((EXPANDED_H + draw::BOUNCE_ROOM) * scale).ceil() as i32;
             let screen = info.rcMonitor;
             self.origin = POINT { x: screen.left + (screen.right - screen.left - width) / 2, y: screen.top };
             let _ = self.gfx.resize(width, height, self.dpi);
@@ -401,8 +405,7 @@ impl App {
             .collect();
         let caret = (self.started_at.elapsed().as_millis() / 530) % 2 == 0;
         let transition = self.page_transition.map(|(from, direction, started)| {
-            let p = (started.elapsed().as_secs_f32() / PAGE_SECONDS).min(1.0);
-            (from, direction, 1.0 - (1.0 - p).powi(3))
+            (from, direction, (started.elapsed().as_secs_f32() / motion::PAGE_SECONDS).min(1.0))
         });
         let city = &prayer::CITIES[self.prayer_city];
         let (day, minute_now) = city.now();
@@ -457,6 +460,7 @@ impl App {
             },
             notice: notice.as_deref(),
             arrows: self.pages().len() > 1,
+            bounce: self.bounce,
             speed: self.speed_enabled,
         };
         let _ = self.gfx.present(self.hwnd, self.origin, &view, self.dpi);
@@ -826,12 +830,17 @@ impl App {
 
     /// Satu langkah animasi: buka/tutup notch, lebar notch kecil, dan geser halaman.
     fn step_animation(&mut self) {
-        let p = (self.started.elapsed().as_secs_f32() / ANIMATION_SECONDS).min(1.0);
-        let eased = 1.0 - (1.0 - p).powi(3); // Ease-out cubic.
+        // Membuka: pegas dengan pantulan kecil ke bawah. Menutup: lebih cepat, tanpa pantulan.
+        let opening = self.target > self.from;
+        let seconds = if opening { motion::OPEN_SECONDS } else { motion::CLOSE_SECONDS };
+        let p = (self.started.elapsed().as_secs_f32() / seconds).min(1.0);
+        let eased = motion::spring(p, 1.0);
         self.t = self.from + (self.target - self.from) * eased;
+        self.bounce = if opening { (motion::spring(p, motion::OPEN_DAMPING) - eased) * (self.target - self.from) } else { 0.0 };
         let opening_done = p >= 1.0;
         if opening_done {
             self.t = self.target;
+            self.bounce = 0.0;
         }
         // Lebar notch kecil mendekati target 30% per 15 ms, dihitung dari waktu nyata (frame vsync tidak tetap).
         let dt = self.stepped.elapsed().as_secs_f32().min(0.1);
@@ -840,7 +849,7 @@ impl App {
         let step = |current: f32, target: f32| if (target - current).abs() < 0.5 { target } else { current + (target - current) * k };
         self.compact = (step(self.compact.0, self.compact_target.0), step(self.compact.1, self.compact_target.1));
         if let Some((_, _, started)) = self.page_transition {
-            if started.elapsed().as_secs_f32() >= PAGE_SECONDS {
+            if started.elapsed().as_secs_f32() >= motion::PAGE_SECONDS {
                 self.page_transition = None;
             }
         }
