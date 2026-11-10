@@ -185,7 +185,7 @@ fn read_entry(events: &[Event], start: usize) -> Option<(Entry, usize)> {
     let Event::Start { attrs, empty, .. } = &events[start] else { return None };
     let key = attr(attrs, "for")
         .map(str::to_string)
-        .or_else(|| attrs.iter().filter(|(k, _)| matches!(local(k), "key" | "id")).last().map(|(_, v)| v.clone()))
+        .or_else(|| attrs.iter().rfind(|(k, _)| matches!(local(k), "key" | "id")).map(|(_, v)| v.clone()))
         .unwrap_or_default();
     let (mut first_span, mut last_span): (Option<f64>, Option<f64>) = (None, None);
     let mut text = String::new();
@@ -410,7 +410,7 @@ pub(super) fn better_lyrics(title: &str, artist: &str, album: &str, duration: f6
         ..Default::default()
     };
     // Hasil cache tidak menyertakan score; score rendah tetap perlu pilihan manual.
-    Ok((record, score.map_or(true, |s| s >= 0.90)))
+    Ok((record, score.is_none_or(|s| s >= 0.90)))
 }
 
 // ---------------------------------------------------------------------------------------------

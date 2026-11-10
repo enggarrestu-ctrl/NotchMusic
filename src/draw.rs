@@ -367,7 +367,7 @@ pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip
     if page == PAGE_PRAYER {
         let (l, r) = PRAYER_CITY;
         if let Some(scroll) = picker {
-            if x >= l && x <= r - 8.0 && y >= PICKER_TOP + 4.0 && y <= PICKER_BOTTOM - 4.0 {
+            if x >= l && x <= r - 8.0 && (PICKER_TOP + 4.0..=PICKER_BOTTOM - 4.0).contains(&y) {
                 let index = ((y - PICKER_TOP - 4.0 + scroll) / PICKER_ROW_H) as usize;
                 return if index < crate::prayer::CITIES.len() { Hit::CityItem(index) } else { Hit::None };
             }
@@ -423,7 +423,7 @@ fn clip_hit(clip: &ClipHit, x: f32, y: f32) -> Hit {
     if chip(CLIP_RESET) && clip.total > 0 {
         return Hit::ClipReset;
     }
-    if x >= PAGE_LEFT && x <= PAGE_RIGHT && (CLIP_SEARCH_TOP..=CLIP_SEARCH_BOTTOM).contains(&y) {
+    if (PAGE_LEFT..=PAGE_RIGHT).contains(&x) && (CLIP_SEARCH_TOP..=CLIP_SEARCH_BOTTOM).contains(&y) {
         return Hit::ClipSearch;
     }
     let right = clip_list_right(clip.ids.len());
@@ -1637,7 +1637,7 @@ unsafe fn logo_geometry(factory: &ID2D1Factory) -> Result<ID2D1Geometry> {
         let mut m = rotation(-42.0, 28.5, 3.25);
         m.M31 += tx;
         m.M32 += ty;
-        Ok(factory.CreateTransformedGeometry(&group, &m)?.cast()?)
+        factory.CreateTransformedGeometry(&group, &m)?.cast()
     };
     let upper = slot("M19.38 4.55 H37.62 V12.948 A5.8368 3.952 0 0 1 31.7832 16.9 H25.2168 A5.8368 3.952 0 0 1 19.38 12.948 Z", 0.0, 21.0)?;
     let lower = slot("M19.38 1.95 V-6.448 A5.8368 3.952 0 0 1 25.2168 -10.4 H31.7832 A5.8368 3.952 0 0 1 37.62 -6.448 V1.95 Z", 43.0, 72.5)?;

@@ -272,7 +272,7 @@ fn main() -> Result<()> {
         net::spawn(hwnd.0 as isize, WM_NET, speed.clone());
         let lyrics_shared = Arc::new(Mutex::new(lyrics::Shared::default()));
         let lyric_requests = lyrics::spawn(hwnd.0 as isize, WM_LYRICS, lyrics_shared.clone());
-        let speed_enabled = read_setting("SpeedEnabled").map_or(true, |v| v != 0);
+        let speed_enabled = read_setting("SpeedEnabled") != Some(0);
         let notices = notify::spawn(hwnd.0 as isize, WM_NOTICE, speed_enabled);
         notify::watch_pads(&notices, hwnd.0 as isize, WM_NOTICE);
 
@@ -296,16 +296,16 @@ fn main() -> Result<()> {
             game_keys: games::load_keys(),
             games: Vec::new(),
             game_status: GAME_HINT.into(),
-            games_enabled: read_setting("GamesEnabled").map_or(true, |v| v != 0),
+            games_enabled: read_setting("GamesEnabled") != Some(0),
             game_press: None,
             game_drag: None,
-            clipboard_enabled: read_setting("ClipboardEnabled").map_or(true, |v| v != 0),
-            prayer_enabled: read_setting("PrayerEnabled").map_or(true, |v| v != 0),
+            clipboard_enabled: read_setting("ClipboardEnabled") != Some(0),
+            prayer_enabled: read_setting("PrayerEnabled") != Some(0),
             speed_enabled,
             notices,
             game_latched: false,
             game_unlocked: false,
-            docked: read_setting("Docked").map_or(true, |v| v != 0),
+            docked: read_setting("Docked") != Some(0),
             position: read_setting("CenterX").zip(read_setting("TopY")).map(|(x, y)| (x as i32, y as i32)),
             pressed: None,
             grab: None,
@@ -463,7 +463,7 @@ impl App {
             .into_iter()
             .map(|item| ClipRow { id: item.id, preview: &item.preview, time: &item.time })
             .collect();
-        let caret = (self.started_at.elapsed().as_millis() / 530) % 2 == 0;
+        let caret = (self.started_at.elapsed().as_millis() / 530).is_multiple_of(2);
         let transition = self.page_transition.map(|(from, direction, started)| {
             (from, direction, (started.elapsed().as_secs_f32() / motion::PAGE_SECONDS).min(1.0))
         });
@@ -781,7 +781,7 @@ impl App {
         let loaded = std::fs::read(&path).ok().and_then(|bytes| {
             // UTF-16 (BOM FF FE) dari Notepad lama, selain itu UTF-8.
             let text = if bytes.starts_with(&[0xFF, 0xFE]) {
-                let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = bytes[2..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
                 String::from_utf16_lossy(&units)
             } else {
                 String::from_utf8_lossy(&bytes).into_owned()

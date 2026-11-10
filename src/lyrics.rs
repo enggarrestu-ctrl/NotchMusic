@@ -939,7 +939,7 @@ fn identify(raw_title: &str, raw_artist: &str, duration: f64) -> Option<Identifi
             let longer = duration > 0.0 && seconds > 0.0 && (seconds - duration > 10.0 || duration - seconds > 90.0);
             let other_version = version.find_iter(&format!("{title} {album}")).any(|m| !raw_lower.contains(&m.as_str().to_lowercase()));
             let score = score - if longer { 0.2 } else { 0.0 } - if other_version { 0.3 } else { 0.0 };
-            if best.as_ref().map_or(true, |(b, _)| score > *b) {
+            if best.as_ref().is_none_or(|(b, _)| score > *b) {
                 best = Some((score, Identified { title, artist: song_artist, duration: seconds }));
             }
         }

@@ -54,6 +54,6 @@ mod tests {
             let (_, out_alpha, _, in_alpha) = shared_axis(i as f32 / 100.0, 1.0, 48.0);
             assert!(out_alpha == 0.0 || in_alpha == 0.0);
         }
-        assert_eq!(shared_axis(1.0, 1.0, 48.0).2.abs() < 0.01, true);
+        assert!(shared_axis(1.0, 1.0, 48.0).2.abs() < 0.01);
     }
 }
