@@ -442,7 +442,9 @@ fn add_unison(records: &mut Vec<Record>, asked: &mut Vec<String>, query: (&str, 
 }
 
 fn kind(lyrics: &Lyrics) -> &'static str {
-    if lyrics.is_synced() {
+    if lyrics.lines.is_empty() && lyrics.plain.is_empty() && !lyrics.instrumental {
+        "kosong"
+    } else if lyrics.is_synced() {
         "berwaktu"
     } else if lyrics.instrumental {
         "instrumental"
@@ -461,12 +463,9 @@ pub fn saved_choices(title: &str, artist: &str) -> Vec<Choice> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let identity = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .and_then(|value| value.get("identity")?.as_str().map(str::to_string));
-        let Some(identity) = identity else { continue };
-        let Some(lyrics) = cache_read(&identity) else { continue };
+        let Some(value) = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()) else { continue };
+        let Some(identity) = value.get("identity").and_then(Value::as_str).map(str::to_string) else { continue };
+        let Some(lyrics) = cache_parse(&value) else { continue };
         let mut parts = identity.split('\u{1f}');
         let (song, singer) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
         let score = if artist.trim().is_empty() {
@@ -1207,6 +1206,10 @@ fn cache_read(identity: &str) -> Option<Lyrics> {
     if value.get("identity")?.as_str()? != identity {
         return None;
     }
+    cache_parse(&value)
+}
+
+fn cache_parse(value: &Value) -> Option<Lyrics> {
     let lines = value
         .get("lines")?
         .as_array()?

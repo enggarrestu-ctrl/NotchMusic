@@ -32,12 +32,10 @@ pub fn spawn(hwnd: isize, message: u32, enabled: bool) -> Arc<Shared> {
     let poll = shared.clone();
     std::thread::spawn(move || unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        if !allowed() {
-            return; // Izin "akses notifikasi" dimatikan di Windows: fitur diam saja.
-        }
+        let _ = allowed(true); // Minta izin sekali; bila ditolak, tetap dicek tiap putaran agar izin baru langsung terpakai.
         let mut seen: Option<HashSet<u32>> = None; // None = daftar awal belum dibaca; notifikasi lama tidak muncul.
         loop {
-            if poll.enabled.load(Ordering::Relaxed) {
+            if poll.enabled.load(Ordering::Relaxed) && allowed(false) {
                 if let Ok(shown) = toasts() {
                     let fresh = seen
                         .as_ref()
@@ -50,7 +48,7 @@ pub fn spawn(hwnd: isize, message: u32, enabled: bool) -> Arc<Shared> {
                     }
                 }
             } else {
-                seen = None; // Saat dinyalakan lagi, notifikasi lama tidak muncul.
+                seen = None; // Saat dinyalakan lagi (atau izin baru diberikan), notifikasi lama tidak muncul.
             }
             std::thread::sleep(Duration::from_secs(2));
         }
@@ -82,12 +80,14 @@ fn post(shared: &Shared, hwnd: isize, message: u32, text: String) {
     }
 }
 
-fn allowed() -> bool {
+/// Izin "akses notifikasi" Windows; `request` = tampilkan permintaan izin bila belum.
+fn allowed(request: bool) -> bool {
     let Ok(listener) = UserNotificationListener::Current() else { return false };
     if listener.GetAccessStatus().is_ok_and(|s| s == UserNotificationListenerAccessStatus::Allowed) {
         return true;
     }
-    listener
+    request
+        && listener
         .RequestAccessAsync()
         .and_then(|request| request.get())
         .is_ok_and(|s| s == UserNotificationListenerAccessStatus::Allowed)

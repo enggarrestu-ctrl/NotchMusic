@@ -74,6 +74,9 @@ impl History {
     pub fn find(&self, query: &str) -> Vec<&Item> {
         let query: String = query.chars().take(256).collect::<String>().to_lowercase();
         let words: Vec<&str> = query.split_whitespace().take(8).collect();
+        if words.is_empty() {
+            return self.items.iter().collect(); // Dipanggil tiap frame: jangan ubah huruf semua item.
+        }
         self.items.iter().filter(|item| {
             let text = item.text.to_lowercase();
             words.iter().all(|w| text.contains(w))

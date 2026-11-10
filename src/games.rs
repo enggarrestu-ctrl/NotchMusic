@@ -115,8 +115,10 @@ pub struct SteamGame {
 }
 
 fn value(text: &str, key: &str) -> Option<String> {
-    let pattern = Regex::new(&format!(r#"(?i)"{}"\s*"([^"]*)""#, regex::escape(key))).ok()?;
-    let value = pattern.captures(text)?.get(1)?.as_str().trim().to_string();
+    static PAIR: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let pair = PAIR.get_or_init(|| Regex::new(r#""([^"]+)"\s*"([^"]*)""#).expect("regex"));
+    let found = pair.captures_iter(text).find(|c| c[1].eq_ignore_ascii_case(key))?;
+    let value = found[2].trim();
     (!value.is_empty()).then(|| value.chars().take(128).collect())
 }
 
