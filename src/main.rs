@@ -2172,13 +2172,6 @@ fn read_setting(name: &str) -> Option<u32> {
     status.is_ok().then_some(value)
 }
 
-fn delete_setting(name: &str) {
-    let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-    unsafe {
-        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, SETTINGS_KEY, PCWSTR(name.as_ptr()));
-    }
-}
-
 fn write_setting(name: &str, value: u32) {
     let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
