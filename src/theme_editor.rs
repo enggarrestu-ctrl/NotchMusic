@@ -1,14 +1,19 @@
 // Editor tema kustom, port ThemeEditor NotchMusic: enam kotak warna (klik = dialog warna Windows,
 // sama dengan "Edit colors" di Paint) dan kode hex. Perubahan langsung dipratinjau di notch;
 // Batal/tutup mengembalikan tema sebelumnya, Simpan menjadikannya tema "Kustom" (urutan terakhir).
+// Jendelanya sendiri memakai warna yang sedang diedit: latar, kolom hex, tombol, dan bilah judul.
 
 use std::cell::{Cell, RefCell};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, GetSysColorBrush, InvalidateRect, COLOR_BTNFACE, HBRUSH, HFONT,
+    CreateFontIndirectW, CreateRoundRectRgn, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, FillRgn, GetSysColorBrush,
+    InvalidateRect, RedrawWindow, SelectObject, SetBkColor, SetBkMode, SetTextColor, COLOR_BTNFACE, DT_CENTER, DT_SINGLELINE,
+    DT_VCENTER, HBRUSH, HDC, HFONT, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, TRANSPARENT,
 };
+use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_SELECTED};
 use windows::Win32::System::Registry::{RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ};
 use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CC_ANYCOLOR, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow, SystemParametersInfoForDpi};
@@ -36,6 +41,9 @@ struct State {
     swatches: [HWND; 6],
     edits: [HWND; 6],
     brushes: [HBRUSH; 6],
+    /// Latar jendela (warna latar notch) dan kolom hex (warna cover/garis tepi).
+    back: HBRUSH,
+    field: HBRUSH,
     font: HFONT,
     handler: fn(Action),
     saved: bool,
@@ -104,6 +112,54 @@ fn colorref(rgb: u32) -> COLORREF {
     COLORREF(((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF))
 }
 
+/// Teks putih di warna gelap, hampir hitam di warna terang.
+fn text_on(rgb: u32) -> COLORREF {
+    let (r, g, b) = ((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+    if r * 299 + g * 587 + b * 114 > 150_000 { COLORREF(0x111111) } else { COLORREF(0xFFFFFF) }
+}
+
+/// Warnai ulang jendela editor dari warna yang sedang diedit (juga bilah judul lewat DWM).
+unsafe fn retheme(state: &mut State) {
+    let _ = DeleteObject(state.back);
+    let _ = DeleteObject(state.field);
+    state.back = CreateSolidBrush(colorref(state.colors[0]));
+    state.field = CreateSolidBrush(colorref(state.colors[1]));
+    let caption = colorref(state.colors[0]);
+    let text = text_on(state.colors[0]);
+    let dark = (text.0 == 0xFFFFFF) as i32;
+    let set = |attribute: i32, value: *const std::ffi::c_void| {
+        let _ = DwmSetWindowAttribute(state.hwnd, DWMWINDOWATTRIBUTE(attribute), value, 4);
+    };
+    set(20, &dark as *const i32 as _); // DWMWA_USE_IMMERSIVE_DARK_MODE
+    set(35, &caption as *const COLORREF as _); // DWMWA_CAPTION_COLOR (Windows 11)
+    set(36, &text as *const COLORREF as _); // DWMWA_TEXT_COLOR
+    let _ = RedrawWindow(state.hwnd, None, None, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+/// Tombol Simpan (aksen, teks warna ikon) dan Batal (warna cover); ditekan = warna tombol.
+unsafe fn draw_button(item: &DRAWITEMSTRUCT) {
+    let Some((colors, back, font)) = STATE.with(|s| s.try_borrow().ok()?.as_ref().map(|s| (s.colors, s.back, s.font))) else { return };
+    let hdc = item.hDC;
+    let r = item.rcItem;
+    FillRect(hdc, &r, back);
+    let pressed = (item.itemState.0 & ODS_SELECTED.0) != 0;
+    let fill = if pressed { colors[2] } else if item.CtlID == IDOK.0 as u32 { colors[3] } else { colors[1] };
+    let text = if !pressed && item.CtlID == IDOK.0 as u32 { colorref(colors[4]) } else { text_on(fill) };
+    let region = CreateRoundRectRgn(r.left, r.top, r.right + 1, r.bottom + 1, 10, 10);
+    let brush = CreateSolidBrush(colorref(fill));
+    let _ = FillRgn(hdc, region, brush);
+    let _ = DeleteObject(brush);
+    let _ = DeleteObject(region);
+    let mut label = [0u16; 32];
+    let length = GetWindowTextW(item.hwndItem, &mut label) as usize;
+    let old = SelectObject(hdc, font);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, text);
+    let mut area = r;
+    DrawTextW(hdc, &mut label[..length], &mut area, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, old);
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -166,15 +222,19 @@ pub unsafe fn open(instance: HINSTANCE, owner: HWND, colors: [u32; 6], topmost: 
         SendMessageW(edits[i], 0xC5 /* EM_LIMITTEXT */, WPARAM(7), LPARAM(0));
     }
     let buttons_y = 48 + 6 * 32 + 8;
-    control(w!("BUTTON"), "Simpan", WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32), WINDOW_EX_STYLE(0), 186, buttons_y, 80, 28, IDOK.0 as usize);
-    control(w!("BUTTON"), "Batal", WS_TABSTOP, WINDOW_EX_STYLE(0), 274, buttons_y, 80, 28, IDCANCEL.0 as usize);
+    // Digambar sendiri (WM_DRAWITEM) agar ikut warna tema; Enter tetap = Simpan lewat IsDialogMessage (IDOK).
+    let owner_draw = WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32);
+    control(w!("BUTTON"), "Simpan", owner_draw, WINDOW_EX_STYLE(0), 186, buttons_y, 80, 28, IDOK.0 as usize);
+    control(w!("BUTTON"), "Batal", owner_draw, WINDOW_EX_STYLE(0), 274, buttons_y, 80, 28, IDCANCEL.0 as usize);
     let mut frame = RECT { left: 0, top: 0, right: px(370), bottom: px(buttons_y + 28 + 16) };
     let _ = AdjustWindowRectExForDpi(&mut frame, style, false, ex, dpi);
     let (w, h) = (frame.right - frame.left, frame.bottom - frame.top);
     let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
     let _ = SetWindowPos(hwnd, None, (sw - w) / 2, (sh - h) / 2, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     let brushes = colors.map(|c| CreateSolidBrush(colorref(c)));
-    STATE.with(|s| *s.borrow_mut() = Some(State { hwnd, colors, swatches, edits, brushes, font, handler, saved: false }));
+    let mut state = State { hwnd, colors, swatches, edits, brushes, back: HBRUSH::default(), field: HBRUSH::default(), font, handler, saved: false };
+    retheme(&mut state);
+    STATE.with(|s| *s.borrow_mut() = Some(state));
     let _ = ShowWindow(hwnd, SW_SHOW);
     let _ = SetForegroundWindow(hwnd);
 }
@@ -200,6 +260,7 @@ unsafe fn typed(i: usize) {
         let _ = DeleteObject(state.brushes[i]);
         state.brushes[i] = CreateSolidBrush(colorref(rgb));
         let _ = InvalidateRect(state.swatches[i], None, true);
+        retheme(state);
         Some((state.handler, state.colors))
     });
     if let Some((handler, colors)) = update {
@@ -252,21 +313,46 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, 
             }
             LRESULT(0)
         }
-        WM_CTLCOLORSTATIC => {
+        WM_ERASEBKGND => {
+            let back = STATE.with(|s| s.try_borrow().ok()?.as_ref().map(|s| s.back));
+            match back {
+                Some(back) => {
+                    let mut area = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut area);
+                    FillRect(HDC(wparam.0 as _), &area, back);
+                    LRESULT(1)
+                }
+                None => DefWindowProcW(hwnd, message, wparam, lparam),
+            }
+        }
+        // Kotak warna = warnanya; label = teks di atas latar tema; kolom hex = warna cover.
+        // try_borrow: pesan ini bisa datang saat STATE sedang dipinjam (retheme).
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
             let control = HWND(lparam.0 as _);
+            let hdc = HDC(wparam.0 as _);
             let brush = STATE.with(|s| {
-                let s = s.borrow();
+                let s = s.try_borrow().ok()?;
                 let state = s.as_ref()?;
-                state.swatches.iter().position(|&h| h == control).map(|i| state.brushes[i])
+                if let Some(i) = state.swatches.iter().position(|&h| h == control) {
+                    return Some(state.brushes[i]);
+                }
+                let (color, brush) = if message == WM_CTLCOLOREDIT { (state.colors[1], state.field) } else { (state.colors[0], state.back) };
+                SetTextColor(hdc, text_on(color));
+                SetBkColor(hdc, colorref(color));
+                Some(brush)
             });
             match brush {
                 Some(brush) => LRESULT(brush.0 as isize),
                 None => DefWindowProcW(hwnd, message, wparam, lparam),
             }
         }
+        WM_DRAWITEM => {
+            draw_button(&*(lparam.0 as *const DRAWITEMSTRUCT));
+            LRESULT(1)
+        }
         WM_DESTROY => {
             if let Some(state) = STATE.with(|s| s.borrow_mut().take()) {
-                for brush in state.brushes {
+                for brush in state.brushes.into_iter().chain([state.back, state.field]) {
                     let _ = DeleteObject(brush);
                 }
                 let _ = DeleteObject(state.font);

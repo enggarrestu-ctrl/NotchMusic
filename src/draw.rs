@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, ID2D1Bitmap, ID2D1Brush, ID2D1DeviceContext, ID2D1Factory, ID2D1Factory1, ID2D1Geometry, ID2D1Image,
+    D2D1CreateFactory, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, ID2D1Bitmap, ID2D1Brush, ID2D1DeviceContext, ID2D1Factory, ID2D1Factory1, ID2D1Geometry, ID2D1Image,
     ID2D1RenderTarget, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
     ID2D1PathGeometry, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
@@ -229,6 +229,8 @@ pub struct View<'a> {
     pub bounce: f32,
     /// Menempel di atas layar (sudut atas melengkung ke luar) atau mengambang (bulat di semua sisi).
     pub docked: bool,
+    /// Posisi slider saat diseret/baru dilepas (pecahan 0..1), menggantikan posisi dari pemutar.
+    pub seek: Option<f32>,
 }
 
 /// Ukuran sudut bentuk notch (sama dengan NotchSurface.UpdateOutline): flare atas saat menempel,
@@ -315,6 +317,12 @@ pub fn inside_shape(t: f32, compact: (f32, f32), x: f32, y: f32) -> bool {
     x >= x0 && x <= x0 + w && y >= 0.0 && y <= h
 }
 
+/// Pecahan 0..1 slider untuk x (DIP). Thumb 16 DIP: pusatnya tidak keluar track.
+pub fn seek_fraction((left, right): (f32, f32), x: f32) -> f32 {
+    let (start, end) = (left + 8.0, right - 8.0);
+    ((x - start) / (end - start)).clamp(0.0, 1.0)
+}
+
 /// Lebar daftar clipboard: menyisakan tempat scrollbar bila isi lebih tinggi dari area daftar.
 fn clip_list_right(rows: usize) -> f32 {
     if rows as f32 * CLIP_ROW_H > CLIP_LIST_H { PAGE_RIGHT - 16.0 } else { PAGE_RIGHT }
@@ -391,8 +399,7 @@ pub fn hit_test(t: f32, page: usize, media: &MediaState, track: (f32, f32), clip
     }
     let (left, right) = track;
     if media.duration_secs() > 0.0 && x >= left && x <= right && (y - ROW_SEEK_Y).abs() <= 11.0 {
-        let (start, end) = (left + 8.0, right - 8.0); // Thumb 16 DIP: pusatnya tidak keluar track.
-        return Hit::Seek(((x - start) / (end - start)).clamp(0.0, 1.0));
+        return Hit::Seek(seek_fraction(track, x));
     }
     if near(x, y, PREVIOUS_X, ROW_BUTTONS_Y, 14.0) {
         Hit::Previous
@@ -466,7 +473,6 @@ struct Formats {
     sky_name: IDWriteTextFormat,
     sky_time: IDWriteTextFormat,
     card_label: IDWriteTextFormat,
-    card_zone: IDWriteTextFormat,
     card_name: IDWriteTextFormat,
     card_time: IDWriteTextFormat,
     card_note: IDWriteTextFormat,
@@ -565,7 +571,6 @@ impl Gfx {
                 sky_name: format(&dwrite, 9.0, normal, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
                 sky_time: format(&dwrite, 12.0, semi, DWRITE_TEXT_ALIGNMENT_CENTER, false, false)?,
                 card_label: format(&dwrite, 9.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
-                card_zone: format(&dwrite, 9.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING, false, false)?,
                 card_name: format(&dwrite, 13.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
                 card_time: format(&dwrite, 22.0, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
                 card_note: format(&dwrite, 11.0, semi, DWRITE_TEXT_ALIGNMENT_LEADING, false, false)?,
@@ -781,7 +786,10 @@ impl Gfx {
 
         let media = v.media;
         let duration = media.duration_secs();
-        let elapsed = media.elapsed_secs(v.now);
+        let elapsed = match v.seek {
+            Some(fraction) if duration > 0.0 => fraction as f64 * duration,
+            _ => media.elapsed_secs(v.now),
+        };
         let fraction = if duration > 0.0 { (elapsed / duration) as f32 } else { 0.0 };
         let compact_alpha = 1.0 - (v.t * 2.5).min(1.0);
         if compact_alpha > 0.0 && media.active && duration > 0.0 {
@@ -924,8 +932,8 @@ impl Gfx {
             return Ok(());
         }
         let speed_left = CENTER_X + half + 8.0;
-        self.text(&format!("↓ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
-        self.text(&format!("↑ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
+        self.text(&format!("â†“ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
+        self.text(&format!("â†‘ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
         Ok(())
     }
 
@@ -1138,7 +1146,7 @@ impl Gfx {
         rt.FillRoundedRectangle(&search, &self.brush(theme.soft, alpha)?);
         let text_area = rect(PAGE_LEFT + 9.0, CLIP_SEARCH_TOP, PAGE_RIGHT - 9.0, CLIP_SEARCH_BOTTOM);
         if clip.search.is_empty() {
-            self.text("Cari kata dalam clipboard…", &self.formats.search, text_area, &self.brush(theme.ink, alpha * 0.5)?);
+            self.text("Cari kata dalam clipboardâ€¦", &self.formats.search, text_area, &self.brush(theme.ink, alpha * 0.5)?);
         } else {
             self.text(clip.search, &self.formats.search, text_area, &ink);
         }
@@ -1215,11 +1223,10 @@ impl Gfx {
         let (cl, ct, cr, cb) = PRAYER_CARD;
         rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rect(cl, ct, cr, cb), radiusX: 12.0, radiusY: 12.0 }, &accent);
         // Baris label: status di kiri, zona waktu di kanan (UI/UX Pro Max: label ringkas satu baris, posisi konsisten).
-        let label = if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" };
+        let label = format!("{} Â· {}", if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" }, p.zone);
         let muted = self.brush(theme.ink, alpha * 0.7)?;
-        self.text(label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 12.0, ct + 26.0), &muted);
-        self.text(p.zone, &self.formats.card_zone, rect(cl + 12.0, ct + 12.0, cr - 12.0, ct + 26.0), &muted);
-        // Nama + jam satu baris; bila nama panjang (Maghrib) keduanya diperkecil bersama, tidak dipotong "…".
+        self.text(&label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 12.0, ct + 26.0), &muted);
+        // Nama + jam satu baris; bila nama panjang (Maghrib) keduanya diperkecil bersama, tidak dipotong "â€¦".
         let time = p.next_time.label();
         let name_w = self.measure(p.next_time.name, &self.formats.card_name);
         let time_w = self.measure(&time, &self.formats.card_time);
@@ -1342,7 +1349,8 @@ impl Gfx {
             }
             let icon = rect(cx - GAME_ICON / 2.0, GAME_ROW_Y - GAME_ICON / 2.0, cx + GAME_ICON / 2.0, GAME_ROW_Y + GAME_ICON / 2.0);
             match self.game_icon(game) {
-                Some(bitmap) => rt.DrawBitmap(&bitmap, Some(&icon), tile_alpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None),
+                // Cubic: ikon 96 px diperkecil ke ~44 DIP tanpa tepi bergerigi (linear tampak kotak-kotak).
+                Some(bitmap) => self.gpu.context.DrawBitmap(&bitmap, Some(&icon), tile_alpha, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None),
                 None => {
                     // Tanpa ikon: kotak warna permukaan dengan huruf awal nama.
                     let fallback = D2D1_ROUNDED_RECT { rect: icon, radiusX: 10.0, radiusY: 10.0 };
@@ -1391,7 +1399,7 @@ impl Gfx {
         icon
     }
 
-    /// .ico/.jpg: frame terkecil yang masih >= 64 px (tajam di skala 150%), atau yang terbesar.
+    /// .ico/.jpg: frame terkecil yang masih >= 96 px (tajam di skala 200%), atau yang terbesar; diperkecil ke 96 px.
     unsafe fn decode_file(&self, path: &std::path::Path) -> Result<ID2D1Bitmap> {
         let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
         let decoder = self.wic.CreateDecoderFromFilename(PCWSTR(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)?;
@@ -1401,13 +1409,18 @@ impl Gfx {
             decoder.GetFrame(i)?.GetSize(&mut w, &mut h)?;
             best = match best {
                 None => Some((w, i)),
-                Some((bw, _)) if (w >= 64 && (bw < 64 || w < bw)) || (bw < 64 && w > bw) => Some((w, i)),
+                Some((bw, _)) if (w >= 96 && (bw < 96 || w < bw)) || (bw < 96 && w > bw) => Some((w, i)),
                 keep => keep,
             };
         }
         let frame = decoder.GetFrame(best.map_or(0, |b| b.1))?;
+        let (mut width, mut height) = (0u32, 0u32);
+        frame.GetSize(&mut width, &mut height)?;
+        let scale = (96.0 / width.max(height).max(1) as f32).min(1.0);
+        let scaler = self.wic.CreateBitmapScaler()?;
+        scaler.Initialize(&frame, ((width as f32 * scale) as u32).max(1), ((height as f32 * scale) as u32).max(1), WICBitmapInterpolationModeFant)?;
         let converter = self.wic.CreateFormatConverter()?;
-        converter.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)?;
+        converter.Initialize(&scaler, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)?;
         self.target.CreateBitmapFromWicBitmap(&converter, None)
     }
 
@@ -1424,7 +1437,7 @@ impl Gfx {
     }
 
     /// Daftar kota seperti dropdown NotchMusic: kotak warna Soft di bawah pil, teks Ink, baris disorot Accent,
-    /// kota terpilih bertanda ✓; digulir dengan roda mouse.
+    /// kota terpilih bertanda âœ“; digulir dengan roda mouse.
     unsafe fn paint_city_picker(&self, v: &View, alpha: f32, scroll: f32) -> Result<()> {
         let rt = &self.target;
         let theme = v.theme;
@@ -1444,7 +1457,7 @@ impl Gfx {
                 rt.FillRoundedRectangle(&row, &self.brush(theme.accent, alpha)?);
             }
             if i == v.prayer.city_index {
-                self.text("✓", &self.formats.row, rect(l + 9.0, top, l + 22.0, top + PICKER_ROW_H), &ink);
+                self.text("âœ“", &self.formats.row, rect(l + 9.0, top, l + 22.0, top + PICKER_ROW_H), &ink);
             }
             self.text(city.name, &self.formats.row, rect(l + 22.0, top, r - 10.0, top + PICKER_ROW_H), &ink);
         }

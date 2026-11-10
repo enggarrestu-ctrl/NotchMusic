@@ -1,3 +1,5 @@
 // Ikon exe (juga ikon jendela lirik) dan manifest aplikasi.
 1 ICON "NotchMusic.ico"
+// Ikon tray (minimalkan ke hidden icons); tidak perlu file .ico di samping exe.
+2 ICON "NotchMusic_Tray_Mint.ico"
 1 24 "app.manifest"

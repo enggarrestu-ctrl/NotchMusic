@@ -74,7 +74,7 @@ const TIMER_CLIPBOARD_RETRY: usize = 5;
 
 
 
-const COLLAPSE_DELAY_MS: u32 = 350;
+const COLLAPSE_DELAY_MS: u32 = 140;
 
 const MENU_AUTOSTART: usize = 1;
 const MENU_EXIT: usize = 2;
@@ -137,6 +137,10 @@ struct App {
     game_status: String,
     games_enabled: bool,
     game_press: Option<(usize, POINT)>,
+    /// Slider lagu sedang diseret (pecahan 0..1), lalu ditahan setelah dilepas sampai pemutar melapor
+    /// posisi baru (pecahan, waktu lepas, `updated` media saat itu) agar bulatan tidak meloncat balik.
+    seek_drag: Option<f32>,
+    seek_hold: Option<(f32, Instant, i64)>,
     game_drag: Option<(usize, Option<(usize, bool)>)>,
     /// Fitur yang bisa dimatikan dari menu klik kanan.
     clipboard_enabled: bool,
@@ -298,6 +302,8 @@ fn main() -> Result<()> {
             game_status: GAME_HINT.into(),
             games_enabled: read_setting("GamesEnabled") != Some(0),
             game_press: None,
+            seek_drag: None,
+            seek_hold: None,
             game_drag: None,
             clipboard_enabled: read_setting("ClipboardEnabled") != Some(0),
             prayer_enabled: read_setting("PrayerEnabled") != Some(0),
@@ -478,6 +484,11 @@ impl App {
             let phase = [0.0, 1.3, 2.1, 0.7, 2.9][i];
             0.35 + 0.65 * (elapsed_secs * speed + phase).sin().abs()
         });
+        // Posisi slider: yang sedang diseret, atau yang baru dilepas (maks. 1,5 detik / sampai pemutar melapor).
+        if self.seek_hold.is_some_and(|(_, at, updated)| at.elapsed().as_millis() > 1500 || media.updated != updated) {
+            self.seek_hold = None;
+        }
+        let seek = self.seek_drag.or(self.seek_hold.map(|(fraction, _, _)| fraction));
         let view = View {
             t: self.t,
             compact: self.compact,
@@ -531,6 +542,7 @@ impl App {
             bounce: self.bounce,
             docked: self.docked,
             speed: self.speed_enabled,
+            seek,
         };
         let _ = self.gfx.present(self.hwnd, self.origin, &view, self.dpi);
     }
@@ -1116,6 +1128,14 @@ impl App {
         if self.game_locked() {
             return;
         }
+        if let Hit::Seek(fraction) = self.hit(x, y) {
+            unsafe {
+                SetCapture(self.hwnd);
+            }
+            self.seek_drag = Some(fraction);
+            self.render();
+            return;
+        }
         if let Hit::GameTile(i) = self.hit(x, y) {
             let mut cursor = POINT::default();
             unsafe {
@@ -1186,7 +1206,28 @@ impl App {
     }
 
     /// Lepas tombol: bila tadi menyeret, simpan posisi dan susun ulang (DPI monitor baru); kembalikan true.
+    /// Lepas slider: loncat ke posisi itu. Dilepas di luar notch = notch menutup seperti biasa.
+    fn finish_seek(&mut self) -> bool {
+        let Some(fraction) = self.seek_drag.take() else { return false };
+        let mut cursor = POINT::default();
+        unsafe {
+            if GetCapture() == self.hwnd {
+                let _ = ReleaseCapture();
+            }
+            let _ = GetCursorPos(&mut cursor);
+            if WindowFromPoint(cursor) != self.hwnd {
+                SetTimer(self.hwnd, TIMER_COLLAPSE, COLLAPSE_DELAY_MS, None);
+            }
+        }
+        let updated = self.media.lock().unwrap().updated;
+        self.seek_hold = Some((fraction, Instant::now(), updated));
+        let _ = self.commands.send(Command::Seek(fraction as f64));
+        self.render();
+        true
+    }
+
     fn finish_drag(&mut self) -> bool {
+        self.seek_drag = None; // Capture hilang saat menyeret slider: batal.
         self.pressed = None;
         let dragged = self.grab.take().is_some();
         unsafe {
@@ -1320,6 +1361,12 @@ impl App {
     }
 
     fn on_mouse_move(&mut self, lparam: LPARAM) {
+        if self.seek_drag.is_some() {
+            let (x, _) = self.to_dip(lparam);
+            self.seek_drag = Some(draw::seek_fraction(self.gfx.track, x));
+            self.render();
+            return;
+        }
         if self.drag_game(lparam) || self.drag_to() {
             return;
         }
@@ -1352,6 +1399,9 @@ impl App {
 
     fn on_mouse_leave(&mut self) {
         self.tracking = false;
+        if self.seek_drag.is_some() {
+            return; // Masih menyeret slider di luar notch: tutup setelah dilepas.
+        }
         if self.hover != Hit::None {
             self.hover = Hit::None;
             self.render();
@@ -1626,7 +1676,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                with_app(|app| if !app.finish_game_drag() && !app.finish_drag() && !app.game_locked() { app.on_click(lparam) });
+                with_app(|app| if !app.finish_seek() && !app.finish_game_drag() && !app.finish_drag() && !app.game_locked() { app.on_click(lparam) });
                 LRESULT(0)
             }
             WM_CAPTURECHANGED => {
@@ -2137,15 +2187,19 @@ fn notchmusic_theme() -> Option<usize> {
     digits.parse().ok().filter(|&theme: &usize| theme <= THEMES.len()) // Indeks terakhir = tema kustom.
 }
 
-/// Ikon tray dibaca dari file di samping exe, sama seperti versi WPF.
+/// Ikon tray: tertanam di exe (resource 2), cadangan file di samping exe seperti versi WPF.
 fn load_tray_icon() -> HICON {
     unsafe {
+        let size = GetSystemMetrics(SM_CXSMICON);
+        let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+        if let Ok(handle) = LoadImageW(module, PCWSTR(2 as _), IMAGE_ICON, size, size, LR_DEFAULTCOLOR) {
+            return HICON(handle.0);
+        }
         let path = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|dir| dir.join("NotchMusic_Tray_Mint.ico")));
         if let Some(path) = path {
             let wide: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
-            let size = GetSystemMetrics(SM_CXSMICON);
             if let Ok(handle) = LoadImageW(None, PCWSTR(wide.as_ptr()), IMAGE_ICON, size, size, LR_LOADFROMFILE) {
                 return HICON(handle.0);
             }
