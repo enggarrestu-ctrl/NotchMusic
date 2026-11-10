@@ -1085,6 +1085,7 @@ impl App {
         let (ids, total) = self.clipboard_hit();
         let clip = ClipHit { ids: &ids, total, scroll: self.scroll };
         let page = if self.page_transition.is_some() { usize::MAX } else { self.page };
+        let y = y - draw::content_dy(self.docked); // Isi panel turun saat mengambang.
         draw::hit_test(self.t, page, &self.media.lock().unwrap(), self.gfx.track, &clip, self.city_picker, self.games.len(), x, y)
     }
 
@@ -1308,7 +1309,7 @@ impl App {
         let (x, y) = self.to_dip(lparam);
         let count = self.games.len();
         // Pindah ke kanan = ditaruh sesudah kotak tujuan; ke kiri = sebelum. Kotak "+" = paling belakang (kirinya).
-        let drop = draw::game_tile_at(count, x, y).and_then(|tile| {
+        let drop = draw::game_tile_at(count, x, y - draw::content_dy(self.docked)).and_then(|tile| {
             let to = tile.min(count.saturating_sub(1));
             (to != from).then_some((tile, from < to && tile < count))
         });

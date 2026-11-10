@@ -247,6 +247,12 @@ fn corners(w: f32, h: f32, docked: bool) -> (f32, f32, f32) {
 
 /// Ruang di bawah notch terbuka untuk pantulan pegas (jendela sedikit lebih tinggi dari EXPANDED_H).
 pub const BOUNCE_ROOM: f32 = 12.0;
+/// Isi panel terbuka turun 12 DIP saat mengambang (tanpa layar di atasnya): jarak atas = jarak bawah.
+pub const FLOAT_DY: f32 = 12.0;
+
+pub fn content_dy(docked: bool) -> f32 {
+    if docked { 0.0 } else { FLOAT_DY }
+}
 
 /// Bentuk notch saat ini termasuk pantulan (hanya ke bawah; lebarnya sudah memenuhi jendela).
 pub fn view_bounds(v: &View) -> (f32, f32, f32) {
@@ -812,7 +818,7 @@ impl Gfx {
         if alpha > 0.0 {
             // Isi panel tumbuh dari 94% ke 100% dari tengah atas, seperti ExpandedScale.
             let s = 0.94 + 0.06 * alpha;
-            let base = Matrix3x2 { M11: s, M12: 0.0, M21: 0.0, M22: s, M31: CENTER_X * (1.0 - s), M32: 8.0 * (1.0 - s) };
+            let base = Matrix3x2 { M11: s, M12: 0.0, M21: 0.0, M22: s, M31: CENTER_X * (1.0 - s), M32: 8.0 * (1.0 - s) + content_dy(v.docked) };
             rt.SetTransform(&base);
             self.paint_deck(v, alpha, base)?;
             // Halaman bergeser di dalam viewport 522 DIP; panah dan logo tetap di tempat.
@@ -920,18 +926,21 @@ impl Gfx {
         Ok(())
     }
 
-    /// Notch kecil: jam tepat di tengah, logo di kirinya, kecepatan internet di kanannya.
+    /// Notch kecil: logo, jam, dan kecepatan internet dipusatkan sebagai satu kelompok.
+    /// Lebar kecepatan memakai teks terpanjang ("↓ 999 KB/s") agar kelompok tidak bergeser tiap detik.
     unsafe fn paint_compact(&self, v: &View, alpha: f32) -> Result<()> {
         let white = self.brush(TEXT, alpha)?;
         let clock_width = self.measure(v.clock, &self.formats.compact_clock);
-        let (cy, half) = (16.0, clock_width / 2.0);
-        self.text(v.clock, &self.formats.compact_clock, rect(CENTER_X - half - 4.0, 4.0, CENTER_X + half + 4.0, 28.0), &white);
-        let logo_right = CENTER_X - half - 8.0;
-        self.fill_icon_box(&self.icons.logo, logo_right - 14.0, cy - 7.0, 14.0, 100.0, &self.brush(LOGO_COLOR, alpha)?, Matrix3x2::identity());
+        let speed_width = if v.speed { 8.0 + self.measure("↓ 999 KB/s", &self.formats.speed) } else { 0.0 };
+        let cy = 16.0;
+        let logo_left = CENTER_X - (14.0 + 8.0 + clock_width + speed_width) / 2.0;
+        let clock_left = logo_left + 14.0 + 8.0;
+        self.fill_icon_box(&self.icons.logo, logo_left, cy - 7.0, 14.0, 100.0, &self.brush(LOGO_COLOR, alpha)?, Matrix3x2::identity());
+        self.text(v.clock, &self.formats.compact_clock, rect(clock_left - 4.0, 4.0, clock_left + clock_width + 4.0, 28.0), &white);
         if !v.speed {
             return Ok(());
         }
-        let speed_left = CENTER_X + half + 8.0;
+        let speed_left = clock_left + clock_width + 8.0;
         self.text(&format!("↓ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
         self.text(&format!("↑ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
         Ok(())
