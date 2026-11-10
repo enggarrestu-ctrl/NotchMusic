@@ -13,6 +13,8 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 - Kecepatan internet ↓/↑.
 - Tampilan mengikuti NotchMusic: bentuk notch menempel dengan sudut atas melengkung, logo N, enam tema bawaan
   (pertama kali jalan memakai tema yang sedang dipakai NotchMusic), tombol pin, tema, dan minimalkan ke tray.
+- Editor tema kustom (klik kanan tombol tema atau "Edit tema…"): enam warna lewat dialog warna Windows atau kode hex,
+  pratinjau langsung di notch; disimpan sebagai tema "Kustom" (tema kustom NotchMusic ikut diimpor).
 - Selalu di atas, tidak muncul di Alt+Tab, ikon tray, dan opsi jalan otomatis saat Windows mulai (menu klik kanan).
 
 **Lirik**
@@ -44,7 +46,7 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 
 **Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
 
-Belum di-port: editor tema kustom dan romaji dari Better Lyrics/Unison.
+Belum di-port: romaji dari Better Lyrics/Unison.
 
 ## Build
 

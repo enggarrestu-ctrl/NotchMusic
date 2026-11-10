@@ -17,6 +17,7 @@ mod motion;
 mod net;
 mod notify;
 mod prayer;
+mod theme_editor;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -86,6 +87,7 @@ const MENU_PRAYER: usize = 8;
 const MENU_SPEED: usize = 9;
 const MENU_RESET_POSITION: usize = 10;
 const MENU_GAMES: usize = 11;
+const MENU_EDIT_THEME: usize = 12;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: PCWSTR = w!("NotchRust");
@@ -156,6 +158,9 @@ struct App {
     commands: Sender<Command>,
     tray_icon: HICON,
     theme: usize,
+    /// Tema kustom tersimpan (urutan terakhir setelah tema bawaan) dan pratinjau editor tema.
+    custom_theme: Option<draw::Theme>,
+    preview_theme: Option<draw::Theme>,
     pinned: bool,
     /// Diminimalkan ke tray: jendela disembunyikan, ikon tray tetap ada.
     hidden: bool,
@@ -302,7 +307,9 @@ fn main() -> Result<()> {
             speed,
             commands,
             tray_icon: load_tray_icon(),
-            theme: read_setting("Theme").map(|v| v as usize).or_else(notchmusic_theme).unwrap_or(DEFAULT_THEME) % THEMES.len(),
+            theme: read_setting("Theme").map(|v| v as usize).or_else(notchmusic_theme).unwrap_or(DEFAULT_THEME) % (THEMES.len() + 1),
+            custom_theme: theme_editor::load().map(theme_editor::to_theme),
+            preview_theme: None,
             pinned: read_setting("Pinned").map(|v| v != 0).unwrap_or(true),
             hidden: false,
             compact: (COMPACT_W, COMPACT_H),
@@ -356,6 +363,9 @@ fn main() -> Result<()> {
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
                 if message.message == WM_QUIT {
                     break 'messages;
+                }
+                if theme_editor::dialog_message(&message) {
+                    continue;
                 }
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
@@ -467,7 +477,7 @@ impl App {
             media: &media,
             now,
             hover: self.hover,
-            theme: &THEMES[self.theme],
+            theme: &self.theme(),
             pinned: self.pinned,
             lyric: LyricView {
                 previous: &lines.previous,
@@ -578,7 +588,7 @@ impl App {
             }
             return;
         }
-        let theme = &THEMES[self.theme];
+        let theme = &self.theme();
         let opened = lyrics_window::LyricsWindow::open(self.instance, theme, self.pinned, self.dpi, on_lyrics_action);
         if let Ok(window) = opened {
             window.set_mode(self.lyrics_mode.index());
@@ -1472,13 +1482,10 @@ impl App {
                 return;
             }
             Hit::Theme => {
-                self.theme = (self.theme + 1) % THEMES.len();
+                let count = THEMES.len() + self.custom_theme.is_some() as usize;
+                self.theme = (self.theme % count + 1) % count;
                 write_setting("Theme", self.theme as u32);
-                if let Some(window) = &self.lyrics_window {
-                    window.set_theme(&THEMES[self.theme]);
-                }
-                self.update_tray();
-                self.render();
+                self.apply_theme();
                 return;
             }
             Hit::Minimize => {
@@ -1530,11 +1537,43 @@ impl App {
             hIcon: self.tray_icon,
             ..Default::default()
         };
-        let tip = format!("NotchRust · Tema: {}", THEMES[self.theme].name);
+        let tip = format!("NotchRust · Tema: {}", self.theme().name);
         for (slot, ch) in data.szTip.iter_mut().take(127).zip(tip.encode_utf16()) {
             *slot = ch;
         }
         data
+    }
+
+    /// Tema aktif: pratinjau editor, lalu tema kustom (indeks terakhir), lalu tema bawaan.
+    fn theme(&self) -> draw::Theme {
+        match (self.preview_theme, self.custom_theme) {
+            (Some(preview), _) => preview,
+            (None, Some(custom)) if self.theme == THEMES.len() => custom,
+            _ => THEMES[self.theme % THEMES.len()],
+        }
+    }
+
+    fn apply_theme(&mut self) {
+        if let Some(window) = &self.lyrics_window {
+            window.set_theme(&self.theme());
+        }
+        self.update_tray();
+        self.render();
+    }
+
+    fn theme_action(&mut self, action: theme_editor::Action) {
+        match action {
+            theme_editor::Action::Preview(colors) => self.preview_theme = Some(theme_editor::to_theme(colors)),
+            theme_editor::Action::Save(colors) => {
+                theme_editor::save(colors);
+                self.preview_theme = None;
+                self.custom_theme = Some(theme_editor::to_theme(colors));
+                self.theme = THEMES.len();
+                write_setting("Theme", self.theme as u32);
+            }
+            theme_editor::Action::Cancel => self.preview_theme = None,
+        }
+        self.apply_theme();
     }
 
     fn update_tray(&self) {
@@ -1587,6 +1626,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 match with_app(|app| (app.game_locked(), { let (x, y) = app.to_dip(lparam); app.hit(x, y) })) {
                     Some((true, _)) | None => {}
                     Some((false, Hit::GameTile(i))) => show_game_menu(hwnd, i),
+                    Some((false, Hit::Theme)) => open_theme_editor(hwnd),
                     Some((false, _)) => show_menu(hwnd),
                 }
                 LRESULT(0)
@@ -1735,7 +1775,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
 /// Klik kanan ikon game: menu kecil bertema "Hapus dari daftar" (shortcut/game aslinya tidak disentuh).
 unsafe fn show_game_menu(hwnd: HWND, index: usize) {
     let Ok(popup) = CreatePopupMenu() else { return };
-    let theme = &THEMES[with_app(|app| app.theme).unwrap_or(0)];
+    let theme = &with_app(|app| app.theme()).unwrap_or(THEMES[0]);
     menu::begin(popup, menu::Colors { background: theme.background, surface: theme.surface, text: 0xFFFFFF });
     menu::append(popup, MF_STRING, 1, "Hapus dari daftar");
     let mut cursor = POINT::default();
@@ -1776,7 +1816,7 @@ unsafe fn show_menu(hwnd: HWND) {
     let checked = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
     let show_label = if hidden { "Tampilkan notch" } else { "Minimalkan ke tray" };
     // Menu digambar sendiri dengan warna tema notch (lihat menu.rs).
-    let theme = &THEMES[with_app(|app| app.theme).unwrap_or(0)];
+    let theme = &with_app(|app| app.theme()).unwrap_or(THEMES[0]);
     menu::begin(menu, menu::Colors { background: theme.background, surface: theme.surface, text: 0xFFFFFF });
     let item = |flags: MENU_ITEM_FLAGS, id: usize, text: &str| menu::append(menu, flags, id, text);
     item(MF_STRING, MENU_SHOW, show_label);
@@ -1784,6 +1824,7 @@ unsafe fn show_menu(hwnd: HWND) {
     item(MF_STRING, MENU_REFRESH_LYRICS, "Cari ulang lirik");
     item(MF_STRING | checked(offline), MENU_OFFLINE, "Lirik offline saja");
     item(MF_STRING | checked(autostart), MENU_AUTOSTART, "Jalan otomatis saat Windows mulai");
+    item(MF_STRING, MENU_EDIT_THEME, "Edit tema…");
     item(MF_STRING, MENU_RESET_POSITION, "Reset posisi ke atas tengah layar");
     menu::separator(menu);
     item(MF_STRING | MF_GRAYED, 0, "Fitur aktif");
@@ -1811,6 +1852,7 @@ unsafe fn show_menu(hwnd: HWND) {
             with_app(|app| app.set_hidden(!hidden));
         }
         MENU_AUTOSTART => set_autostart(!autostart),
+        MENU_EDIT_THEME => open_theme_editor(hwnd),
         MENU_RESET_POSITION => {
             with_app(|app| app.reset_position());
         }
@@ -1908,6 +1950,16 @@ fn set_autostart(enabled: bool) {
 }
 
 /// Aksi dari jendela lirik (tombol, daftar, tutup).
+/// Editor tema (klik kanan tombol tema, atau "Edit tema…" di menu), dimulai dari warna tema aktif.
+unsafe fn open_theme_editor(hwnd: HWND) {
+    let Some((instance, colors, pinned)) = with_app(|app| (app.instance, theme_editor::colors(&app.theme()), app.pinned)) else { return };
+    theme_editor::open(instance, hwnd, colors, pinned, on_theme_action);
+}
+
+fn on_theme_action(action: theme_editor::Action) {
+    with_app(|app| app.theme_action(action));
+}
+
 fn on_lyrics_action(action: lyrics_window::Action) {
     with_app(|app| app.lyrics_action(action));
 }
@@ -1987,7 +2039,7 @@ fn notchmusic_theme() -> Option<usize> {
     let text = std::fs::read_to_string(path).ok()?;
     let rest = &text[text.find("\"Theme\":")? + 8..];
     let digits: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok().filter(|&theme: &usize| theme < THEMES.len())
+    digits.parse().ok().filter(|&theme: &usize| theme <= THEMES.len()) // Indeks terakhir = tema kustom.
 }
 
 /// Ikon tray dibaca dari file di samping exe, sama seperti versi WPF.

@@ -75,7 +75,8 @@ const LOGO_COLOR: u32 = 0x7DE2B4;
 const TEXT: u32 = 0xFFFFFF;
 const LYRIC_BOX: (u32, f32) = (0x8E9162, 0x26 as f32 / 255.0);
 
-/// Background, Surface, Soft, Accent, Ink: sama dengan tema bawaan NotchMusic.
+/// Background, Surface, Soft, Accent, Ink, garis progres: sama dengan tema bawaan NotchMusic.
+#[derive(Clone, Copy)]
 pub struct Theme {
     pub name: &'static str,
     pub background: u32,
@@ -83,16 +84,17 @@ pub struct Theme {
     pub soft: u32,
     pub accent: u32,
     pub ink: u32,
+    pub progress: u32,
 }
 
 pub const THEMES: [Theme; 6] = [
-    Theme { name: "Zaitun", background: 0x6A795D, surface: 0x8E9162, soft: 0xB2BD7E, accent: 0xD9D28B, ink: 0x182116 },
-    Theme { name: "Malam", background: 0x1E2A44, surface: 0x34466B, soft: 0x7FA3D9, accent: 0xBFD7FF, ink: 0x0B1222 },
-    Theme { name: "Grafit", background: 0x1C1C1E, surface: 0x3A3A3C, soft: 0xA1A1A6, accent: 0xE5E5EA, ink: 0x111113 },
-    Theme { name: "Anggur", background: 0x4A2433, surface: 0x6E3A4D, soft: 0xC98AA0, accent: 0xF2C4CE, ink: 0x22101A },
-    Theme { name: "Biru Es", background: 0x112D4E, surface: 0x3F72AF, soft: 0xDBE2EF, accent: 0xF9F7F7, ink: 0x112D4E },
+    Theme { name: "Zaitun", background: 0x6A795D, surface: 0x8E9162, soft: 0xB2BD7E, accent: 0xD9D28B, ink: 0x182116, progress: 0xD9D28B },
+    Theme { name: "Malam", background: 0x1E2A44, surface: 0x34466B, soft: 0x7FA3D9, accent: 0xBFD7FF, ink: 0x0B1222, progress: 0xBFD7FF },
+    Theme { name: "Grafit", background: 0x1C1C1E, surface: 0x3A3A3C, soft: 0xA1A1A6, accent: 0xE5E5EA, ink: 0x111113, progress: 0xE5E5EA },
+    Theme { name: "Anggur", background: 0x4A2433, surface: 0x6E3A4D, soft: 0xC98AA0, accent: 0xF2C4CE, ink: 0x22101A, progress: 0xF2C4CE },
+    Theme { name: "Biru Es", background: 0x112D4E, surface: 0x3F72AF, soft: 0xDBE2EF, accent: 0xF9F7F7, ink: 0x112D4E, progress: 0xF9F7F7 },
     // Hitam legam: latar #000 menyatu dengan bezel layar; aksen mint senada logo.
-    Theme { name: "Hitam Legam", background: 0x000000, surface: 0x2C2C2E, soft: 0xF2F2F7, accent: 0x7DE2B4, ink: 0x000000 },
+    Theme { name: "Hitam Legam", background: 0x000000, surface: 0x2C2C2E, soft: 0xF2F2F7, accent: 0x7DE2B4, ink: 0x000000, progress: 0x7DE2B4 },
 ];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -776,7 +778,7 @@ impl Gfx {
         let fraction = if duration > 0.0 { (elapsed / duration) as f32 } else { 0.0 };
         let compact_alpha = 1.0 - (v.t * 2.5).min(1.0);
         if compact_alpha > 0.0 && media.active && duration > 0.0 {
-            self.paint_edge_progress(x0, w, h, v.docked, fraction, &self.brush(theme.accent, compact_alpha)?)?;
+            self.paint_edge_progress(x0, w, h, v.docked, fraction, &self.brush(theme.progress, compact_alpha)?)?;
         }
         rt.PopLayer();
 
