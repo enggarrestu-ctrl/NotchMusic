@@ -932,8 +932,8 @@ impl Gfx {
             return Ok(());
         }
         let speed_left = CENTER_X + half + 8.0;
-        self.text(&format!("â†“ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
-        self.text(&format!("â†‘ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
+        self.text(&format!("↓ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
+        self.text(&format!("↑ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
         Ok(())
     }
 
@@ -1146,7 +1146,7 @@ impl Gfx {
         rt.FillRoundedRectangle(&search, &self.brush(theme.soft, alpha)?);
         let text_area = rect(PAGE_LEFT + 9.0, CLIP_SEARCH_TOP, PAGE_RIGHT - 9.0, CLIP_SEARCH_BOTTOM);
         if clip.search.is_empty() {
-            self.text("Cari kata dalam clipboardâ€¦", &self.formats.search, text_area, &self.brush(theme.ink, alpha * 0.5)?);
+            self.text("Cari kata dalam clipboard…", &self.formats.search, text_area, &self.brush(theme.ink, alpha * 0.5)?);
         } else {
             self.text(clip.search, &self.formats.search, text_area, &ink);
         }
@@ -1223,10 +1223,10 @@ impl Gfx {
         let (cl, ct, cr, cb) = PRAYER_CARD;
         rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: rect(cl, ct, cr, cb), radiusX: 12.0, radiusY: 12.0 }, &accent);
         // Baris label: status di kiri, zona waktu di kanan (UI/UX Pro Max: label ringkas satu baris, posisi konsisten).
-        let label = format!("{} Â· {}", if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" }, p.zone);
+        let label = format!("{} · {}", if p.next.is_none() { "BESOK" } else { "BERIKUTNYA" }, p.zone);
         let muted = self.brush(theme.ink, alpha * 0.7)?;
         self.text(&label, &self.formats.card_label, rect(cl + 12.0, ct + 12.0, cr - 12.0, ct + 26.0), &muted);
-        // Nama + jam satu baris; bila nama panjang (Maghrib) keduanya diperkecil bersama, tidak dipotong "â€¦".
+        // Nama + jam satu baris; bila nama panjang (Maghrib) keduanya diperkecil bersama, tidak dipotong "…".
         let time = p.next_time.label();
         let name_w = self.measure(p.next_time.name, &self.formats.card_name);
         let time_w = self.measure(&time, &self.formats.card_time);
@@ -1437,7 +1437,7 @@ impl Gfx {
     }
 
     /// Daftar kota seperti dropdown NotchMusic: kotak warna Soft di bawah pil, teks Ink, baris disorot Accent,
-    /// kota terpilih bertanda âœ“; digulir dengan roda mouse.
+    /// kota terpilih bertanda ✓; digulir dengan roda mouse.
     unsafe fn paint_city_picker(&self, v: &View, alpha: f32, scroll: f32) -> Result<()> {
         let rt = &self.target;
         let theme = v.theme;
@@ -1457,7 +1457,7 @@ impl Gfx {
                 rt.FillRoundedRectangle(&row, &self.brush(theme.accent, alpha)?);
             }
             if i == v.prayer.city_index {
-                self.text("âœ“", &self.formats.row, rect(l + 9.0, top, l + 22.0, top + PICKER_ROW_H), &ink);
+                self.text("✓", &self.formats.row, rect(l + 9.0, top, l + 22.0, top + PICKER_ROW_H), &ink);
             }
             self.text(city.name, &self.formats.row, rect(l + 22.0, top, r - 10.0, top + PICKER_ROW_H), &ink);
         }
