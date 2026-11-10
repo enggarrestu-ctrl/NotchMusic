@@ -141,6 +141,8 @@ struct App {
     /// posisi baru (pecahan, waktu lepas, `updated` media saat itu) agar bulatan tidak meloncat balik.
     seek_drag: Option<f32>,
     seek_hold: Option<(f32, Instant, i64)>,
+    /// Lagu saat pencarian jendela lirik dimulai: hasil untuk lagu lain tidak dipakai/disimpan.
+    search_key: String,
     game_drag: Option<(usize, Option<(usize, bool)>)>,
     /// Fitur yang bisa dimatikan dari menu klik kanan.
     clipboard_enabled: bool,
@@ -304,6 +306,7 @@ fn main() -> Result<()> {
             game_press: None,
             seek_drag: None,
             seek_hold: None,
+            search_key: String::new(),
             game_drag: None,
             clipboard_enabled: read_setting("ClipboardEnabled") != Some(0),
             prayer_enabled: read_setting("PrayerEnabled") != Some(0),
@@ -563,6 +566,8 @@ impl App {
         match state {
             lyrics::State::Idle | lyrics::State::Searching => lines.current = "Mencari lirik…".into(),
             lyrics::State::Missing(message) => lines.current = message,
+            // "Tanpa lirik": sengaja dikosongkan, jadi tidak ada teks sama sekali.
+            lyrics::State::Found(found) if found.lines.is_empty() && found.plain.is_empty() && !found.instrumental => {}
             lyrics::State::Found(found) if found.is_synced() => {
                 // Sedikit lebih awal agar baris tidak terasa terlambat dari suara; offset dari jendela lirik.
                 let index = found.index_at(media.elapsed_secs(now) + 0.15 - found.offset);
@@ -687,6 +692,7 @@ impl App {
         self.searching = true;
         self.window_note = "Mencari di LRCLIB, Unison, dan Better Lyrics…".into();
         let media = self.media.lock().unwrap().clone();
+        self.search_key = track_key(&media);
         let (duration, result, hwnd, mode) = (media.duration_secs(), self.choices_result.clone(), self.hwnd.0 as isize, self.lyrics_mode);
         // Judul/artis bawaan (belum diubah): kenali lagu asli dari judul video dulu, seperti pencarian otomatis.
         let identify = (title.clone(), artist.clone()) == lyrics::clean_query(&media.title, &media.artist);
@@ -707,6 +713,17 @@ impl App {
     fn choices_ready(&mut self) {
         let Some(result) = self.choices_result.lock().unwrap().take() else { return };
         self.searching = false;
+        if track_key(&self.media.lock().unwrap()) != self.search_key {
+            // Lagu berganti selama pencarian: hasilnya milik lagu lama, jangan dipakai atau disimpan.
+            self.choices.clear();
+            self.chosen = None;
+            self.window_note = "Lagu berganti saat mencari; tekan Cari ulang.".into();
+            if let Some(window) = &self.lyrics_window {
+                window.set_choices(&[], None);
+            }
+            self.refresh_lyrics_window();
+            return;
+        }
         match result {
             Ok(choices) => {
                 let automatic = choices.iter().position(|c| c.automatic);
@@ -949,6 +966,8 @@ impl App {
 
     /// Tiap detik: tutup pengingat setelah beberapa detik, dan tampilkan pengingat saat masuk waktu salat.
     fn tick(&mut self) {
+        // Pesan "hasil siap" terlewat bila datang saat dialog file terbuka (with_app sedang dipakai).
+        self.choices_ready();
         if self.notice.as_ref().is_some_and(|(_, shown)| shown.elapsed().as_secs_f32() >= NOTICE_SECONDS) {
             self.notice = None;
         }

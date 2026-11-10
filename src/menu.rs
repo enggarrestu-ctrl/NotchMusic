@@ -7,7 +7,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetDC, GetTextExtentPoint32W, ReleaseDC,
-    SelectObject, SetBkMode, SetTextColor, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HFONT, TRANSPARENT,
+    SelectObject, SetBkMode, SetTextColor, DT_LEFT, DT_SINGLELINE, DT_VCENTER, HBRUSH, HFONT, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_CHECKED, ODS_DISABLED, ODS_SELECTED};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -32,6 +32,8 @@ struct State {
     colors: Colors,
     items: Vec<Vec<u16>>,
     font: HFONT,
+    /// Kuas latar menu (MENUINFO): dihapus di `end`, setelah DestroyMenu.
+    back: HBRUSH,
 }
 
 thread_local! {
@@ -48,21 +50,23 @@ pub unsafe fn begin(menu: HMENU, colors: Colors) {
     let mut metrics = NONCLIENTMETRICSW { cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32, ..Default::default() };
     let _ = SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize, Some(&mut metrics as *mut _ as _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
     let font = CreateFontIndirectW(&metrics.lfMenuFont);
+    let back = CreateSolidBrush(colorref(colors.background));
     let info = MENUINFO {
         cbSize: std::mem::size_of::<MENUINFO>() as u32,
         fMask: MIM_BACKGROUND | MIM_APPLYTOSUBMENUS,
-        hbrBack: CreateSolidBrush(colorref(colors.background)),
+        hbrBack: back,
         ..Default::default()
     };
     let _ = SetMenuInfo(menu, &info);
-    STATE.with(|s| *s.borrow_mut() = Some(State { colors, items: Vec::new(), font }));
+    STATE.with(|s| *s.borrow_mut() = Some(State { colors, items: Vec::new(), font, back }));
 }
 
-/// Lepas font setelah menu ditutup (kuas latar ikut dihapus bersama menu oleh Windows? tidak: dibiarkan kecil).
+/// Lepas font dan kuas latar setelah menu ditutup (DestroyMenu tidak menghapus kuas MENUINFO).
 pub unsafe fn end() {
     STATE.with(|s| {
         if let Some(state) = s.borrow_mut().take() {
             let _ = DeleteObject(state.font);
+            let _ = DeleteObject(state.back);
         }
     });
 }
