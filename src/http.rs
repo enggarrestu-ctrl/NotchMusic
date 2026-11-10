@@ -3,7 +3,7 @@
 
 use std::ffi::c_void;
 
-use windows::core::{w, PCWSTR};
+use windows::core::PCWSTR;
 use windows::Win32::Networking::WinHttp::*;
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -33,6 +33,15 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// `url` harus https://host/path?query.
 pub fn get(url: &str) -> Result<Response, String> {
+    send("GET", url, None)
+}
+
+/// POST dengan badan JSON (Unison /translate).
+pub fn post_json(url: &str, body: &str) -> Result<Response, String> {
+    send("POST", url, Some(body.as_bytes()))
+}
+
+fn send(verb: &str, url: &str, body: Option<&[u8]>) -> Result<Response, String> {
     let rest = url.strip_prefix("https://").ok_or("hanya https")?;
     let (host, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -58,7 +67,7 @@ pub fn get(url: &str) -> Result<Response, String> {
         }
         let request = Handle(WinHttpOpenRequest(
             connection.0,
-            w!("GET"),
+            PCWSTR(wide(verb).as_ptr()),
             PCWSTR(path_w.as_ptr()),
             PCWSTR::null(),
             PCWSTR::null(),
@@ -68,8 +77,10 @@ pub fn get(url: &str) -> Result<Response, String> {
         if request.0.is_null() {
             return Err("permintaan gagal dibuat".into());
         }
-        let headers: Vec<u16> = "Accept: application/json\r\n".encode_utf16().collect();
-        WinHttpSendRequest(request.0, Some(&headers), None, 0, 0, 0).map_err(|e| e.message())?;
+        let headers = if body.is_some() { "Accept: application/json\r\nContent-Type: application/json\r\n" } else { "Accept: application/json\r\n" };
+        let headers: Vec<u16> = headers.encode_utf16().collect();
+        let (data, length) = body.map_or((None, 0), |b| (Some(b.as_ptr() as *const c_void), b.len() as u32));
+        WinHttpSendRequest(request.0, Some(&headers), data, length, length, 0).map_err(|e| e.message())?;
         WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|e| e.message())?;
 
         let mut status = 0u32;

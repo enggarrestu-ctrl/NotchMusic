@@ -1,5 +1,5 @@
 // Lirik berwaktu: cache lokal, pengenalan lagu dari judul video (Deezer), pencarian LRCLIB,
-// pemeringkatan kandidat, dan romaji untuk lagu Jepang (penganalisis fonetik Jepang Windows).
+// pemeringkatan kandidat, dan romaji untuk lagu Jepang (Better Lyrics/Unison, lalu penganalisis fonetik Jepang Windows).
 // Port dari LyricsFeature.cs NotchMusic; semua permintaan berjalan di thread pencari ini.
 
 use std::collections::HashSet;
@@ -20,6 +20,8 @@ use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::http;
+
+mod sources;
 
 const MAX_LINES: usize = 1500;
 const MAX_SOURCE_CHARS: usize = 200_000;
@@ -210,11 +212,16 @@ fn resolve(request: &Request) -> State {
     if request.offline {
         return State::Missing("Lirik offline: lagu ini belum tersimpan".into());
     }
-    let choices = search_choices(&request.title, &request.artist, &request.album, request.duration, true);
+    let choices = search_choices(&request.title, &request.artist, &request.album, request.duration, true, request.mode);
     match choices.map(|c| c.into_iter().find(|c| c.automatic)) {
         Ok(Some(choice)) => {
             let mut lyrics = choice.lyrics;
             apply_mode(&mut lyrics, request.mode);
+            // Baris yang tidak terbaca penganalisis Windows: cadangan Unison (gagal = teks asli tetap).
+            // shortcut: hanya di pencarian otomatis (thread ini); pilihan manual memakai romaji lokal saja.
+            if request.mode != Mode::Original {
+                let _ = sources::unison_romanize(&mut lyrics);
+            }
             cache_write(&identity, &lyrics);
             State::Found(Arc::new(lyrics))
         }
@@ -233,7 +240,7 @@ fn resolve(request: &Request) -> State {
 // Pencarian
 
 #[derive(Clone, Debug, Default)]
-struct Record {
+pub(crate) struct Record {
     track: String,
     artist: String,
     album: String,
@@ -241,6 +248,13 @@ struct Record {
     instrumental: bool,
     plain: Option<String>,
     synced: Option<String>,
+    /// Baris jadi (TTML Better Lyrics/Unison).
+    lines: Option<Vec<Line>>,
+    /// Sudah romaji (bukan teks Jepang asli).
+    romanized: bool,
+    source: &'static str,
+    language: String,
+    id: i64,
 }
 
 impl Record {
@@ -254,6 +268,8 @@ impl Record {
             instrumental: value.get("instrumental").and_then(Value::as_bool).unwrap_or(false),
             plain: value.get("plainLyrics").and_then(Value::as_str).map(str::to_string),
             synced: value.get("syncedLyrics").and_then(Value::as_str).map(str::to_string),
+            source: "LRCLIB",
+            ..Default::default()
         };
         // Tolak sumber berlebihan; jangan menampilkan potongan lirik seolah lengkap.
         let too_long = |s: &Option<String>| s.as_ref().is_some_and(|s| s.len() > MAX_SOURCE_CHARS);
@@ -261,7 +277,22 @@ impl Record {
     }
 
     fn has_timing(&self) -> bool {
-        self.synced.as_ref().is_some_and(|s| !s.trim().is_empty())
+        self.synced.as_ref().is_some_and(|s| !s.trim().is_empty()) || self.lines.as_ref().is_some_and(|l| !l.is_empty())
+    }
+
+    /// Bahasa Jepang: kode bahasa ja, atau (tanpa kode) ada kana. Kanji saja bisa Mandarin.
+    fn is_japanese(&self) -> bool {
+        let language = self.language.trim().replace('_', "-").to_ascii_lowercase();
+        if language == "ja" || language.starts_with("ja-") {
+            return true;
+        }
+        if !language.is_empty() && language != "und" && language != "unknown" {
+            return false;
+        }
+        match &self.lines {
+            Some(lines) => lines.iter().any(|l| has_kana(&l.text)),
+            None => has_kana(self.synced.as_deref().or(self.plain.as_deref()).unwrap_or("")),
+        }
     }
 }
 
@@ -275,7 +306,9 @@ struct Candidate {
 /// dan durasi cocok); kandidat lemah sering berupa cover atau terjemahan lagu lain.
 /// `identify_song`: kenali lagu asli dari judul video dulu (pencarian otomatis); pencarian manual
 /// dari jendela lirik memakai judul/artis yang diketik apa adanya.
-pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, identify_song: bool) -> Result<Vec<Choice>, String> {
+/// `mode`: lagu Jepang (Otomatis/Romaji) juga mencari romaji berwaktu Better Lyrics; Unison menambah
+/// kandidat bila LRCLIB belum memberi hasil berwaktu yang yakin.
+pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, identify_song: bool, mode: Mode) -> Result<Vec<Choice>, String> {
     let (raw_title, raw_artist) = (title, artist);
     let (mut title, mut artist) = clean_query(title, artist);
     let mut duration = duration;
@@ -290,13 +323,60 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
             }
         }
     }
-    let records = lrclib_find(&title, &artist, album, duration)?;
-    let ranked = rank(records, &title, &artist, duration);
-    let automatic = auto_choice(&ranked).map(|c| c as *const Candidate);
-    Ok(ranked
-        .iter()
-        .take(12)
-        .filter_map(|c| {
+    let mut note: Option<String> = None;
+    let mut records = lrclib_find(&title, &artist, album, duration).unwrap_or_else(|e| {
+        note = Some(e);
+        Vec::new()
+    });
+    let mut asked = Vec::new();
+    // Mode Lirik asli: rekaman yang sudah romaji tidak dipakai.
+    let eligible = |records: &[Record]| -> Vec<Record> { records.iter().filter(|r| mode != Mode::Original || !r.romanized).cloned().collect() };
+    let ready = |records: &[Record]| {
+        let ranked = rank(eligible(records), &title, &artist, duration);
+        auto_choice(&ranked).is_some_and(|c| c.record.instrumental || c.record.has_timing())
+    };
+    if !ready(&records) {
+        add_unison(&mut records, &mut asked, (&title, &artist, album, duration), mode, &mut note);
+    }
+    let original = auto_choice(&rank(records.clone(), &title, &artist, duration)).map(|c| c.record.clone());
+    let want_romaji = match mode {
+        Mode::Romaji => true,
+        Mode::Original => false,
+        Mode::Auto => original.as_ref().map_or(has_kana(&title), Record::is_japanese),
+    };
+    let mut better = None;
+    if want_romaji && !original.as_ref().is_some_and(|r| r.instrumental || r.romanized) {
+        // Pakai judul/artis/album/durasi rekaman yang cocok bila ada (lebih tepat dari judul video).
+        let canonical = match &original {
+            Some(r) => (
+                r.track.clone(),
+                r.artist.clone(),
+                if r.album.trim().is_empty() { album.to_string() } else { r.album.clone() },
+                if r.duration > 0.0 { r.duration } else { duration },
+            ),
+            None => (title.clone(), artist.clone(), album.to_string(), duration),
+        };
+        match sources::better_lyrics(&canonical.0, &canonical.1, &canonical.2, canonical.3) {
+            Ok((record, confident)) => better = Some((record, confident || records.is_empty())),
+            Err(e) => note = note.or(Some(e)),
+        }
+        if !better.as_ref().is_some_and(|b| b.1) {
+            add_unison(&mut records, &mut asked, (&canonical.0, &canonical.1, &canonical.2, canonical.3), mode, &mut note);
+        }
+    }
+    let better_automatic = better.as_ref().is_some_and(|b| b.1);
+    let better_choice = better.and_then(|(record, automatic)| {
+        Some(Choice {
+            label: format!("Better Lyrics · romaji berwaktu · {} — {}{}", record.track, record.artist, if automatic { "" } else { " · periksa hasil" }),
+            lyrics: to_lyrics(&record)?,
+            automatic,
+        })
+    });
+    let ranked = rank(eligible(&records), &title, &artist, duration);
+    let automatic = auto_choice(&ranked).filter(|_| !better_automatic).map(|c| c as *const Candidate);
+    let choices: Vec<Choice> = better_choice
+        .into_iter()
+        .chain(ranked.iter().take(12).filter_map(|c| {
             let lyrics = to_lyrics(&c.record)?;
             let kind = kind(&lyrics);
             let minutes = if c.record.duration > 0.0 {
@@ -304,13 +384,39 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
             } else {
                 String::new()
             };
+            let romaji = if c.record.romanized { " · romaji" } else { "" };
             Some(Choice {
-                label: format!("LRCLIB · {:.0}% mirip · {} — {}{} · {}", c.score * 100.0, c.record.track, c.record.artist, minutes, kind),
+                label: format!("{} · {:.0}% mirip · {} — {}{} · {}{romaji}", c.record.source, c.score * 100.0, c.record.track, c.record.artist, minutes, kind),
                 lyrics,
                 automatic: automatic == Some(c as *const Candidate),
             })
-        })
-        .collect())
+        }))
+        .collect();
+    match note {
+        // Tidak ada hasil sama sekali dan ada layanan yang gagal: tampilkan alasannya.
+        Some(note) if choices.is_empty() => Err(note),
+        _ => Ok(choices),
+    }
+}
+
+/// Tambah kandidat Unison (maks. dua pencarian berbeda per lagu).
+fn add_unison(records: &mut Vec<Record>, asked: &mut Vec<String>, query: (&str, &str, &str, f64), mode: Mode, note: &mut Option<String>) {
+    let (title, artist, album, duration) = query;
+    let key = format!("{title}\u{1f}{artist}\u{1f}{album}\u{1f}{}", duration.round());
+    if asked.len() >= 2 || asked.contains(&key) {
+        return;
+    }
+    asked.push(key);
+    match sources::unison_find(title, artist, album, duration, mode != Mode::Original) {
+        Ok(mut found) => {
+            found.append(records);
+            found.truncate(20);
+            *records = found;
+        }
+        Err(e) => {
+            note.get_or_insert(e);
+        }
+    }
 }
 
 fn kind(lyrics: &Lyrics) -> &'static str {
@@ -473,7 +579,10 @@ fn auto_choice(choices: &[Candidate]) -> Option<&Candidate> {
 }
 
 fn to_lyrics(record: &Record) -> Option<Lyrics> {
-    let source = "LRCLIB".to_string();
+    let source = record.source.to_string();
+    if let Some(lines) = record.lines.clone().filter(|l| !l.is_empty()) {
+        return Some(Lyrics { lines, source, ..Default::default() });
+    }
     if let Some(lines) = record.synced.as_deref().and_then(parse_lrc) {
         return Some(Lyrics { lines, instrumental: record.instrumental, source, ..Default::default() });
     }
@@ -807,6 +916,10 @@ fn identify(raw_title: &str, raw_artist: &str, duration: f64) -> Option<Identifi
 
 // ---------------------------------------------------------------------------------------------
 // Romaji
+
+fn has_kana(text: &str) -> bool {
+    text.chars().any(|c| matches!(c, '\u{3040}'..='\u{30FF}'))
+}
 
 pub fn has_japanese(text: &str) -> bool {
     text.chars().any(|c| matches!(c, '\u{3040}'..='\u{30FF}' | '\u{3400}'..='\u{9FFF}' | '\u{FF66}'..='\u{FF9D}'))

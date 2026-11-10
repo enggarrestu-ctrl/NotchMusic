@@ -662,9 +662,9 @@ impl App {
             return;
         }
         self.searching = true;
-        self.window_note = "Mencari di LRCLIB…".into();
+        self.window_note = "Mencari di LRCLIB, Unison, dan Better Lyrics…".into();
         let media = self.media.lock().unwrap().clone();
-        let (duration, result, hwnd) = (media.duration_secs(), self.choices_result.clone(), self.hwnd.0 as isize);
+        let (duration, result, hwnd, mode) = (media.duration_secs(), self.choices_result.clone(), self.hwnd.0 as isize, self.lyrics_mode);
         // Judul/artis bawaan (belum diubah): kenali lagu asli dari judul video dulu, seperti pencarian otomatis.
         let identify = (title.clone(), artist.clone()) == lyrics::clean_query(&media.title, &media.artist);
         let (raw_title, raw_artist) = if identify { (media.title.clone(), media.artist.clone()) } else { (title, artist) };
@@ -672,7 +672,7 @@ impl App {
             unsafe {
                 let _ = windows::Win32::System::WinRT::RoInitialize(windows::Win32::System::WinRT::RO_INIT_MULTITHREADED);
             }
-            let found = lyrics::search_choices(&raw_title, &raw_artist, &media.album, duration, identify);
+            let found = lyrics::search_choices(&raw_title, &raw_artist, &media.album, duration, identify, mode);
             *result.lock().unwrap() = Some(found);
             unsafe {
                 let _ = PostMessageW(HWND(hwnd as _), WM_LYRIC_CHOICES, WPARAM(0), LPARAM(0));
@@ -835,7 +835,7 @@ impl App {
                     }
                 }
                 if self.lyrics_mode != lyrics::Mode::Original {
-                    self.window_note = "Romaji memakai penganalisis Jepang Windows; bila tidak tersedia, teks asli yang tampil.".into();
+                    self.window_note = "Romaji dari Better Lyrics/Unison bila ada, selain itu penganalisis Jepang Windows. Cari ulang untuk mencari romaji berwaktu.".into();
                 }
                 self.refresh_lyrics_window();
             }

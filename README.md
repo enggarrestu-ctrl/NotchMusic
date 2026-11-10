@@ -20,7 +20,8 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 **Lirik**
 - Lirik berwaktu dari [LRCLIB](https://lrclib.net); lagu asli dari judul video YouTube dikenali lewat [Deezer](https://www.deezer.com).
 - Kolom lirik (baris sebelumnya, sekarang, berikutnya) di panel terbuka; notch kecil menampilkan baris lirik + equalizer saat lagu diputar.
-- Lagu Jepang tampil dalam romaji (penganalisis fonetik Jepang bawaan Windows).
+- Lagu Jepang tampil dalam romaji: romaji berwaktu Better Lyrics bila ada, lirik komunitas Unison bila LRCLIB
+  belum cocok, lalu penganalisis fonetik Jepang Windows (baris yang gagal dibaca dikonversi lewat Unison).
 - Lirik disimpan di `%LocalAppData%\NotchRust\lyrics`, jadi lagu yang sama tidak dicari ulang. Menu klik kanan: **Cari ulang lirik** dan **Lirik offline saja** (tanpa permintaan internet).
 - Jendela **Lirik** (tombol Aa atau menu klik kanan), tampilannya sama dengan NotchMusic: kaca acrylic berwarna tema,
   jenis lirik (Otomatis/Lirik asli/Romaji) + Cari ulang, daftar "Lirik yang dipakai", koreksi waktu ±0,5 detik,
@@ -46,7 +47,7 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 
 **Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
 
-Belum di-port: romaji dari Better Lyrics/Unison.
+Belum di-port: pencarian romaji tambahan di LRCLIB (langkah terakhir pencarian NotchMusic).
 
 ## Build
 
