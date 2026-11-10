@@ -409,8 +409,8 @@ pub(super) fn better_lyrics(title: &str, artist: &str, album: &str, duration: f6
         source: "Better Lyrics",
         ..Default::default()
     };
-    // Hasil cache tidak menyertakan score; score rendah tetap perlu pilihan manual.
-    Ok((record, score.is_none_or(|s| s >= 0.90)))
+    // Tanpa score (hasil cache) atau score rendah: pilih manual, jangan tampil otomatis (bisa lagu lain).
+    Ok((record, score.is_some_and(|s| s >= 0.90)))
 }
 
 // ---------------------------------------------------------------------------------------------

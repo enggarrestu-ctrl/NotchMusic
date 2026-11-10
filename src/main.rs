@@ -718,6 +718,12 @@ impl App {
                 self.choices = choices;
                 self.chosen = None;
                 self.window_note = format!("{} hasil.", self.choices.len());
+                // Pilihan terakhir: kosongkan bila tidak ada yang cocok, agar lirik yang salah tidak tampil.
+                self.choices.push(lyrics::Choice {
+                    label: "Tanpa lirik · kosongkan untuk lagu ini".into(),
+                    lyrics: lyrics::Lyrics { source: "Dikosongkan".into(), ..Default::default() },
+                    automatic: false,
+                });
                 match automatic {
                     Some(index) => self.choose(index),
                     None => self.window_note.push_str(" Belum ada yang pasti cocok — pilih dari daftar."),
@@ -1248,12 +1254,21 @@ impl App {
         dragged
     }
 
+    /// Tengah atas monitor tempat notch berada sekarang (bukan selalu monitor utama).
     fn reset_position(&mut self) {
-        self.position = None;
+        let width = (EXPANDED_W * self.dpi / 96.0).ceil() as i32;
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        unsafe {
+            let here = POINT { x: self.origin.x + width / 2, y: self.origin.y + 1 };
+            let _ = GetMonitorInfoW(MonitorFromPoint(here, MONITOR_DEFAULTTONEAREST), &mut info);
+        }
+        let screen = info.rcMonitor;
+        let position = ((screen.left + screen.right) / 2, screen.top);
+        self.position = Some(position);
         self.docked = true;
         write_setting("Docked", 1);
-        delete_setting("CenterX");
-        delete_setting("TopY");
+        write_setting("CenterX", position.0 as u32);
+        write_setting("TopY", position.1 as u32);
         self.layout();
         self.render();
     }
