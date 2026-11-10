@@ -280,6 +280,23 @@ impl Record {
         self.synced.as_ref().is_some_and(|s| !s.trim().is_empty()) || self.lines.as_ref().is_some_and(|l| !l.is_empty())
     }
 
+    /// Sudah romaji, atau judul/album menandainya sebagai romaji.
+    fn is_marked_romaji(&self) -> bool {
+        static MARKER: OnceLock<Regex> = OnceLock::new();
+        self.romanized || re(r"(?i)\b(?:romaji|romanized|romanised|romanization|romanisation)\b", &MARKER).is_match(&format!("{} {}", self.track, self.album))
+    }
+
+    /// Rekaman romaji yang bisa dipakai: ditandai romaji, berisi huruf Latin, tanpa aksara Jepang,
+    /// dan bukan terjemahan (teks Latin saja bisa terjemahan Inggris).
+    fn is_romaji(&self) -> bool {
+        static TRANSLATION: OnceLock<Regex> = OnceLock::new();
+        let text = self.plain.as_deref().or(self.synced.as_deref()).unwrap_or("");
+        self.is_marked_romaji()
+            && text.chars().any(|c| c.is_ascii_alphabetic())
+            && !re(r"(?i)\b(?:translation|translated|terjemahan)\b", &TRANSLATION).is_match(&format!("{} {}", self.track, self.album))
+            && !has_japanese(text)
+    }
+
     /// Bahasa Jepang: kode bahasa ja, atau (tanpa kode) ada kana. Kanji saja bisa Mandarin.
     fn is_japanese(&self) -> bool {
         let language = self.language.trim().replace('_', "-").to_ascii_lowercase();
@@ -330,7 +347,7 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
     });
     let mut asked = Vec::new();
     // Mode Lirik asli: rekaman yang sudah romaji tidak dipakai.
-    let eligible = |records: &[Record]| -> Vec<Record> { records.iter().filter(|r| mode != Mode::Original || !r.romanized).cloned().collect() };
+    let eligible = |records: &[Record]| -> Vec<Record> { records.iter().filter(|r| mode != Mode::Original || !r.is_marked_romaji()).cloned().collect() };
     let ready = |records: &[Record]| {
         let ranked = rank(eligible(records), &title, &artist, duration);
         auto_choice(&ranked).is_some_and(|c| c.record.instrumental || c.record.has_timing())
@@ -345,7 +362,7 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
         Mode::Auto => original.as_ref().map_or(has_kana(&title), Record::is_japanese),
     };
     let mut better = None;
-    if want_romaji && !original.as_ref().is_some_and(|r| r.instrumental || r.romanized) {
+    if want_romaji && !original.as_ref().is_some_and(|r| r.instrumental || r.is_marked_romaji()) {
         // Pakai judul/artis/album/durasi rekaman yang cocok bila ada (lebih tepat dari judul video).
         let canonical = match &original {
             Some(r) => (
@@ -362,6 +379,10 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
         }
         if !better.as_ref().is_some_and(|b| b.1) {
             add_unison(&mut records, &mut asked, (&canonical.0, &canonical.1, &canonical.2, canonical.3), mode, &mut note);
+            // Langkah terakhir: rekaman LRCLIB yang ditandai romaji (judul/album "romaji", "romanized").
+            if !ready(&records) && !records.iter().any(Record::is_romaji) {
+                records.extend(lrclib_romaji(&title, &artist));
+            }
         }
     }
     let better_automatic = better.as_ref().is_some_and(|b| b.1);
@@ -384,7 +405,7 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
             } else {
                 String::new()
             };
-            let romaji = if c.record.romanized { " · romaji" } else { "" };
+            let romaji = if c.record.is_marked_romaji() { " · romaji" } else { "" };
             Some(Choice {
                 label: format!("{} · {:.0}% mirip · {} — {}{} · {}{romaji}", c.record.source, c.score * 100.0, c.record.track, c.record.artist, minutes, kind),
                 lyrics,
@@ -536,6 +557,20 @@ fn lrclib_find(title: &str, artist: &str, album: &str, duration: f64) -> Result<
     Ok(records)
 }
 
+/// Rekaman romaji di LRCLIB: cari judul/artis, lalu "judul artis romaji". Gagal = tidak ada tambahan.
+fn lrclib_romaji(title: &str, artist: &str) -> Vec<Record> {
+    let mut path = format!("api/search?track_name={}", http::encode(title));
+    if !artist.trim().is_empty() {
+        path += &format!("&artist_name={}", http::encode(artist));
+    }
+    let mut found: Vec<Record> = parse_records(lrclib(&path, 0).ok().flatten()).into_iter().filter(Record::is_romaji).collect();
+    if found.is_empty() {
+        let query = http::encode(&format!("{title} {artist} romaji"));
+        found = parse_records(lrclib(&format!("api/search?q={query}"), 0).ok().flatten()).into_iter().filter(Record::is_romaji).collect();
+    }
+    found
+}
+
 fn parse_records(value: Option<Value>) -> Vec<Record> {
     let Some(Value::Array(items)) = value else { return Vec::new() };
     items.iter().take(20).filter_map(Record::from_json).collect()
@@ -556,7 +591,8 @@ fn rank(records: Vec<Record>, title: &str, artist: &str, duration: f64) -> Vec<C
             let confident = title_score >= 0.90 && artist_score >= 0.82 && score >= 0.90 && fits;
             Candidate { record, score, confident }
         })
-        .filter(|c| c.score >= 0.40)
+        // Rekaman romaji sering berjudul lain ("... (Romanized)"): tetap dipakai bila artisnya cocok.
+        .filter(|c| c.score >= 0.40 || (c.record.is_marked_romaji() && similarity(&c.record.artist, artist) >= 0.85))
         .collect();
     ranked.sort_by(|a, b| {
         b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.record.has_timing().cmp(&a.record.has_timing()))
@@ -1276,6 +1312,15 @@ mod tests {
         let back = Lyrics::from_file(&text).unwrap();
         assert!((back.lines[1].seconds - 62.5).abs() < 1e-6);
         assert_eq!(Lyrics::from_file("baris satu\n\nbaris dua").unwrap().plain, ["baris satu", "baris dua"]);
+    }
+
+    #[test]
+    fn romaji_records_are_marked_and_not_translations() {
+        let record = |track: &str, plain: &str| Record { track: track.into(), plain: Some(plain.into()), ..Default::default() };
+        assert!(record("Lemon (Romanized)", "yume naraba").is_romaji());
+        assert!(!record("Lemon", "yume naraba").is_romaji());
+        assert!(!record("Lemon (Romaji) English Translated", "if it were a dream").is_romaji());
+        assert!(!record("Lemon romaji", "夢ならば").is_romaji());
     }
 
     #[test]

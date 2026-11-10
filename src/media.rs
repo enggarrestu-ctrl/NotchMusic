@@ -38,6 +38,11 @@ pub struct MediaState {
     pub updated: i64,
     pub cover: Option<Arc<Vec<u8>>>,
     pub cover_id: u64,
+    /// Pemutar mendukung tombol Stop.
+    pub can_stop: bool,
+    /// Semua sesi media Windows (id AUMID, nama ramah) dan sesi pilihan manual (None = otomatis).
+    pub sessions: Vec<(String, String)>,
+    pub manual: Option<String>,
 }
 
 impl MediaState {
@@ -66,6 +71,9 @@ impl MediaState {
             && self.position == other.position
             && self.updated == other.updated
             && self.cover_id == other.cover_id
+            && self.can_stop == other.can_stop
+            && self.sessions == other.sessions
+            && self.manual == other.manual
     }
 }
 
@@ -75,6 +83,23 @@ pub enum Command {
     Previous,
     /// Pecahan 0..1 dari durasi lagu.
     Seek(f64),
+    Stop,
+    /// Ikuti sesi ini (id AUMID), atau None = ikuti pemutar aktif Windows.
+    Select(Option<String>),
+    /// "Baca ulang media": minta ulang pengelola sesi Windows.
+    Reload,
+}
+
+/// Sesi pilihan manual bila masih ada, selain itu sesi aktif Windows.
+fn current(manager: Option<&Manager>, manual: Option<&String>) -> Option<Session> {
+    let manager = manager?;
+    if let Some(id) = manual {
+        let chosen = manager.GetSessions().ok()?.into_iter().find(|s| s.SourceAppUserModelId().is_ok_and(|x| x.to_string() == *id));
+        if chosen.is_some() {
+            return chosen;
+        }
+    }
+    manager.GetCurrentSession().ok()
 }
 
 pub fn spawn(hwnd: isize, msg: u32, shared: Arc<Mutex<MediaState>>) -> Sender<Command> {
@@ -87,10 +112,16 @@ pub fn spawn(hwnd: isize, msg: u32, shared: Arc<Mutex<MediaState>>) -> Sender<Co
         let mut track_key = String::new();
         let mut cover_tries = 0u32;
         let mut next_cover_id = 0u64;
+        let mut manual: Option<String> = None;
         loop {
             match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Command::Select(id)) => manual = id,
+                Ok(Command::Reload) => {
+                    manager = None;
+                    track_key.clear();
+                }
                 Ok(command) => {
-                    if let Some(session) = manager.as_ref().and_then(|m| m.GetCurrentSession().ok()) {
+                    if let Some(session) = current(manager.as_ref(), manual.as_ref()) {
                         let _ = execute(&session, command);
                     }
                 }
@@ -101,7 +132,7 @@ pub fn spawn(hwnd: isize, msg: u32, shared: Arc<Mutex<MediaState>>) -> Sender<Co
                 manager = Manager::RequestAsync().and_then(|op| op.get()).ok();
             }
             let previous = shared.lock().unwrap().clone();
-            let state = match manager.as_ref().and_then(|m| m.GetCurrentSession().ok()) {
+            let mut state = match current(manager.as_ref(), manual.as_ref()) {
                 Some(session) => read_session(
                     &session,
                     &previous,
@@ -114,6 +145,14 @@ pub fn spawn(hwnd: isize, msg: u32, shared: Arc<Mutex<MediaState>>) -> Sender<Co
                     MediaState::default()
                 }
             };
+            state.manual = manual.clone();
+            if let Some(sessions) = manager.as_ref().and_then(|m| m.GetSessions().ok()) {
+                state.sessions = sessions
+                    .into_iter()
+                    .filter_map(|s| s.SourceAppUserModelId().ok().map(|id| id.to_string()))
+                    .map(|id| (id.clone(), friendly_source(&id)))
+                    .collect();
+            }
             if !state.same_as(&previous) {
                 *shared.lock().unwrap() = state;
                 unsafe {
@@ -168,6 +207,7 @@ fn read_session(
 
     if let Ok(info) = session.GetPlaybackInfo() {
         state.playing = info.PlaybackStatus().map(|s| s == Status::Playing).unwrap_or(false);
+        state.can_stop = info.Controls().and_then(|c| c.IsStopEnabled()).unwrap_or(false);
     }
     if let Ok(timeline) = session.GetTimelineProperties() {
         state.start = timeline.StartTime().map(|t| t.Duration).unwrap_or(0);
@@ -196,6 +236,8 @@ fn execute(session: &Session, command: Command) -> Result<bool> {
         Command::PlayPause => session.TryTogglePlayPauseAsync()?.get(),
         Command::Next => session.TrySkipNextAsync()?.get(),
         Command::Previous => session.TrySkipPreviousAsync()?.get(),
+        Command::Stop => session.TryStopAsync()?.get(),
+        Command::Select(_) | Command::Reload => Ok(false), // Ditangani di loop media.
         Command::Seek(fraction) => {
             let timeline = session.GetTimelineProperties()?;
             let start = timeline.StartTime()?.Duration;

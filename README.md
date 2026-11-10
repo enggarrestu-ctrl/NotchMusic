@@ -47,7 +47,11 @@ Dibuat dengan Win32 + Direct2D + DirectComposition lewat crate [`windows`](https
 
 **Fitur aktif** (menu klik kanan): Halaman Clipboard, Halaman Jadwal Salat (dan pengingat), serta Notifikasi dan kecepatan internet bisa dimatikan. Halaman yang dimatikan dilewati, panah hilang bila tinggal satu halaman, dan riwayat clipboard dibuang saat fiturnya dimatikan.
 
-Belum di-port: pencarian romaji tambahan di LRCLIB (langkah terakhir pencarian NotchMusic).
+- Menu klik kanan seperti NotchMusic: pilih sumber musik (otomatis atau satu pemutar), Selalu di atas, mode hemat animasi,
+  Baca ulang media, Cek penggunaan RAM; klik kanan tombol putar untuk Hentikan pemutaran.
+- Rekaman romaji LRCLIB (judul/album bertanda romaji) dipakai bila sumber romaji lain belum ada.
+
+Semua fitur NotchMusic sudah di-port.
 
 ## Build
 

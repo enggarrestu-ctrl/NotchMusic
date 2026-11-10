@@ -527,6 +527,10 @@ pub struct Gfx {
     game_icons: std::collections::HashMap<String, Option<ID2D1Bitmap>>,
     /// Batas slider terakhir yang digambar, untuk hit-test.
     pub track: (f32, f32),
+    /// Mode hemat animasi: tampil tiap dua vsync (30 fps di layar 60 Hz).
+    pub light: bool,
+    /// GPU, atau WARP (render CPU) bila tidak ada GPU.
+    pub hardware: bool,
 }
 
 impl Gfx {
@@ -616,7 +620,7 @@ impl Gfx {
             };
             let dash = dashed(&[1.3, 2.0])?;
             let dot = dashed(&[1.5, 2.5])?;
-            let gpu = create_gpu(&factory)?;
+            let (gpu, hardware) = create_gpu(&factory)?;
             let target = gpu.context.cast()?;
             Ok(Gfx {
                 factory,
@@ -637,6 +641,8 @@ impl Gfx {
                 cover: None,
                 game_icons: std::collections::HashMap::new(),
                 track: seek_track(30.0, 30.0),
+                light: false,
+                hardware,
             })
         }
     }
@@ -661,7 +667,7 @@ impl Gfx {
             self.place(hwnd, origin, view);
             if self.frame(hwnd, view).is_err() {
                 // GPU di-reset (driver diperbarui, dsb.): buat ulang semua perangkat lalu coba sekali lagi.
-                self.gpu = create_gpu(&self.factory)?;
+                (self.gpu, self.hardware) = create_gpu(&self.factory)?;
                 self.target = self.gpu.context.cast()?;
                 self.cover = None;
                 self.game_icons.clear(); // Bitmap terikat ke perangkat GPU lama.
@@ -743,7 +749,8 @@ impl Gfx {
         self.gpu.context.SetTarget(None::<&ID2D1Image>);
         painted?;
         // Sinkron ke vsync: satu frame per refresh monitor, sekaligus menjadi pengatur tempo animasi.
-        swap.Present(1, DXGI_PRESENT(0)).ok()
+        // shortcut: mode hemat = setengah refresh monitor (30 fps hanya di 60 Hz), bukan tepat 30 fps.
+        swap.Present(if self.light { 2 } else { 1 }, DXGI_PRESENT(0)).ok()
     }
     unsafe fn paint(&mut self, v: &View) -> Result<()> {
         self.update_cover(v.media);
@@ -1568,14 +1575,16 @@ impl Gfx {
 }
 
 /// Direct3D11 (GPU; WARP bila tidak ada GPU) -> Direct2D DeviceContext + DirectComposition.
-unsafe fn create_gpu(factory: &ID2D1Factory) -> Result<Gpu> {
+unsafe fn create_gpu(factory: &ID2D1Factory) -> Result<(Gpu, bool)> {
     let create = |driver: D3D_DRIVER_TYPE| -> Result<ID3D11Device> {
         let mut device = None;
         D3D11CreateDevice(None::<&IDXGIAdapter>, driver, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None,
             D3D11_SDK_VERSION, Some(&mut device), None, None)?;
         Ok(device.unwrap())
     };
-    let d3d = create(D3D_DRIVER_TYPE_HARDWARE).or_else(|_| create(D3D_DRIVER_TYPE_WARP))?;
+    let hardware = create(D3D_DRIVER_TYPE_HARDWARE);
+    let is_hardware = hardware.is_ok();
+    let d3d = hardware.or_else(|_| create(D3D_DRIVER_TYPE_WARP))?;
     let dxgi: IDXGIDevice = d3d.cast()?;
     // Antrean satu frame: animasi mengikuti vsync tanpa tertinggal beberapa frame.
     let _ = dxgi.cast::<IDXGIDevice1>()?.SetMaximumFrameLatency(1);
@@ -1583,7 +1592,7 @@ unsafe fn create_gpu(factory: &ID2D1Factory) -> Result<Gpu> {
     let context = device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
     let dcomp: IDCompositionDevice = DCompositionCreateDevice(&dxgi)?;
     let dxgi_factory: IDXGIFactory2 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
-    Ok(Gpu { d3d, dxgi_factory, dcomp, context, swap: None, composition: None })
+    Ok((Gpu { d3d, dxgi_factory, dcomp, context, swap: None, composition: None }, is_hardware))
 }
 unsafe fn format(
     dwrite: &IDWriteFactory,

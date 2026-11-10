@@ -88,6 +88,13 @@ const MENU_SPEED: usize = 9;
 const MENU_RESET_POSITION: usize = 10;
 const MENU_GAMES: usize = 11;
 const MENU_EDIT_THEME: usize = 12;
+const MENU_PIN: usize = 13;
+const MENU_LIGHT: usize = 14;
+const MENU_RELOAD_MEDIA: usize = 15;
+const MENU_MEMORY: usize = 16;
+const MENU_SOURCE_AUTO: usize = 17;
+/// Sesi media ke-i: MENU_SOURCE + i.
+const MENU_SOURCE: usize = 100;
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_NAME: PCWSTR = w!("NotchRust");
@@ -271,7 +278,11 @@ fn main() -> Result<()> {
 
         let app = App {
             hwnd,
-            gfx: Gfx::new()?,
+            gfx: {
+                let mut gfx = Gfx::new()?;
+                gfx.light = read_setting("LightAnimations").is_some_and(|v| v != 0);
+                gfx
+            },
             dpi: 96.0,
             origin: POINT::default(),
             t: 0.0,
@@ -1472,13 +1483,7 @@ impl App {
             Hit::Next => Command::Next,
             Hit::Seek(fraction) => Command::Seek(fraction as f64),
             Hit::Pin => {
-                self.pinned = !self.pinned;
-                write_setting("Pinned", self.pinned as u32);
-                self.apply_pin();
-                if let Some(window) = &self.lyrics_window {
-                    window.set_topmost(self.pinned);
-                }
-                self.render();
+                self.toggle_pin();
                 return;
             }
             Hit::Theme => {
@@ -1495,6 +1500,16 @@ impl App {
             Hit::None => return,
         };
         let _ = self.commands.send(command);
+    }
+
+    fn toggle_pin(&mut self) {
+        self.pinned = !self.pinned;
+        write_setting("Pinned", self.pinned as u32);
+        self.apply_pin();
+        if let Some(window) = &self.lyrics_window {
+            window.set_topmost(self.pinned);
+        }
+        self.render();
     }
 
     /// Selalu di atas (pin aktif) atau jendela biasa.
@@ -1627,6 +1642,7 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                     Some((true, _)) | None => {}
                     Some((false, Hit::GameTile(i))) => show_game_menu(hwnd, i),
                     Some((false, Hit::Theme)) => open_theme_editor(hwnd),
+                    Some((false, Hit::PlayPause)) => show_stop_menu(hwnd),
                     Some((false, _)) => show_menu(hwnd),
                 }
                 LRESULT(0)
@@ -1809,7 +1825,13 @@ unsafe fn pick_game_file(hwnd: HWND) -> Option<String> {
 /// menjalankan message loop sendiri.
 unsafe fn show_menu(hwnd: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
-    let (hidden, offline) = with_app(|app| (app.hidden, app.offline)).unwrap_or((false, false));
+    let (hidden, offline, pinned, light) =
+        with_app(|app| (app.hidden, app.offline, app.pinned, app.gfx.light)).unwrap_or((false, false, true, false));
+    let (sessions, manual) = with_app(|app| {
+        let media = app.media.lock().unwrap();
+        (media.sessions.clone(), media.manual.clone())
+    })
+    .unwrap_or_default();
     let (clipboard_on, prayer_on, speed_on, games_on) =
         with_app(|app| (app.clipboard_enabled, app.prayer_enabled, app.speed_enabled, app.games_enabled)).unwrap_or((true, true, true, true));
     let autostart = autostart_enabled();
@@ -1819,13 +1841,18 @@ unsafe fn show_menu(hwnd: HWND) {
     let theme = &with_app(|app| app.theme()).unwrap_or(THEMES[0]);
     menu::begin(menu, menu::Colors { background: theme.background, surface: theme.surface, text: 0xFFFFFF });
     let item = |flags: MENU_ITEM_FLAGS, id: usize, text: &str| menu::append(menu, flags, id, text);
-    item(MF_STRING, MENU_SHOW, show_label);
-    item(MF_STRING, MENU_LYRICS_WINDOW, "Lirik…");
-    item(MF_STRING, MENU_REFRESH_LYRICS, "Cari ulang lirik");
-    item(MF_STRING | checked(offline), MENU_OFFLINE, "Lirik offline saja");
-    item(MF_STRING | checked(autostart), MENU_AUTOSTART, "Jalan otomatis saat Windows mulai");
-    item(MF_STRING, MENU_EDIT_THEME, "Edit tema…");
+    item(MF_STRING | MF_GRAYED, 0, &format!("NotchRust v{}", env!("CARGO_PKG_VERSION")));
+    menu::separator(menu);
+    // Sumber musik: ikuti pemutar aktif Windows, atau kunci ke satu pemutar.
+    item(MF_STRING | checked(manual.is_none()), MENU_SOURCE_AUTO, "Otomatis: ikuti pemutar aktif Windows");
+    for (i, (id, name)) in sessions.iter().enumerate().take(20) {
+        item(MF_STRING | checked(manual.as_ref() == Some(id)), MENU_SOURCE + i, name);
+    }
+    menu::separator(menu);
+    item(MF_STRING | checked(pinned), MENU_PIN, "Selalu di atas");
     item(MF_STRING, MENU_RESET_POSITION, "Reset posisi ke atas tengah layar");
+    item(MF_STRING, MENU_SHOW, show_label);
+    item(MF_STRING | checked(light), MENU_LIGHT, "Mode hemat animasi (30 fps)");
     menu::separator(menu);
     item(MF_STRING | MF_GRAYED, 0, "Fitur aktif");
     item(MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, "Halaman Clipboard");
@@ -1833,7 +1860,16 @@ unsafe fn show_menu(hwnd: HWND) {
     item(MF_STRING | checked(prayer_on), MENU_PRAYER, "Halaman Jadwal Salat (dan pengingat)");
     item(MF_STRING | checked(speed_on), MENU_SPEED, "Notifikasi dan kecepatan internet");
     menu::separator(menu);
-    item(MF_STRING, MENU_EXIT, "Keluar");    let mut cursor = POINT::default();
+    item(MF_STRING, MENU_LYRICS_WINDOW, "Lirik…");
+    item(MF_STRING, MENU_REFRESH_LYRICS, "Cari ulang lirik");
+    item(MF_STRING | checked(offline), MENU_OFFLINE, "Lirik offline saja (tanpa internet)");
+    item(MF_STRING, MENU_EDIT_THEME, "Edit tema…");
+    item(MF_STRING | checked(autostart), MENU_AUTOSTART, "Jalankan saat Windows mulai");
+    menu::separator(menu);
+    item(MF_STRING, MENU_RELOAD_MEDIA, "Baca ulang media");
+    item(MF_STRING, MENU_MEMORY, "Cek penggunaan RAM");
+    item(MF_STRING, MENU_EXIT, "Keluar");
+    let mut cursor = POINT::default();
     let _ = GetCursorPos(&mut cursor);
     let _ = SetForegroundWindow(hwnd);
     let chosen: BOOL = TrackPopupMenu(
@@ -1893,11 +1929,70 @@ unsafe fn show_menu(hwnd: HWND) {
                 }
             });
         }
+        MENU_PIN => {
+            with_app(|app| app.toggle_pin());
+        }
+        MENU_LIGHT => {
+            with_app(|app| {
+                app.gfx.light = !app.gfx.light;
+                write_setting("LightAnimations", app.gfx.light as u32);
+            });
+        }
+        MENU_SOURCE_AUTO => {
+            with_app(|app| app.commands.send(Command::Select(None)));
+        }
+        id if (MENU_SOURCE..MENU_SOURCE + sessions.len()).contains(&id) => {
+            let chosen = sessions[id - MENU_SOURCE].0.clone();
+            with_app(|app| app.commands.send(Command::Select(Some(chosen))));
+        }
+        MENU_RELOAD_MEDIA => {
+            with_app(|app| app.commands.send(Command::Reload));
+        }
+        MENU_MEMORY => show_memory_usage(hwnd),
         MENU_EXIT => {
             let _ = DestroyWindow(hwnd);
         }
         _ => {}
     }
+}
+
+/// Klik kanan tombol putar: "Hentikan pemutaran" (aktif bila pemutar mendukung Stop).
+unsafe fn show_stop_menu(hwnd: HWND) {
+    let Ok(popup) = CreatePopupMenu() else { return };
+    let can_stop = with_app(|app| app.media.lock().unwrap().can_stop).unwrap_or(false);
+    let theme = &with_app(|app| app.theme()).unwrap_or(THEMES[0]);
+    menu::begin(popup, menu::Colors { background: theme.background, surface: theme.surface, text: 0xFFFFFF });
+    menu::append(popup, if can_stop { MF_STRING } else { MF_STRING | MF_GRAYED }, 1, "Hentikan pemutaran");
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+    let _ = SetForegroundWindow(hwnd);
+    let chosen: BOOL = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, cursor.x, cursor.y, 0, hwnd, None);
+    let _ = DestroyMenu(popup);
+    menu::end();
+    if chosen.0 == 1 {
+        with_app(|app| app.commands.send(Command::Stop));
+    }
+}
+
+/// "Cek penggunaan RAM": angka seperti Task Manager (private working set), total, puncak, dan jenis grafis.
+unsafe fn show_memory_usage(hwnd: HWND) {
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX2 { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32, ..Default::default() };
+    let _ = GetProcessMemoryInfo(GetCurrentProcess(), &mut counters as *mut _ as *mut PROCESS_MEMORY_COUNTERS, counters.cb);
+    let (hardware, light) = with_app(|app| (app.gfx.hardware, app.gfx.light)).unwrap_or((true, false));
+    let mb = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);
+    let report = format!(
+        "NotchRust v{}\n\nRAM (seperti Task Manager): {:.1} MB\nTotal termasuk file bersama: {:.0} MB\nPuncak sejak dibuka: {:.0} MB\n\nGrafis: {} · {}",
+        env!("CARGO_PKG_VERSION"),
+        mb(counters.PrivateWorkingSetSize),
+        mb(counters.WorkingSetSize),
+        mb(counters.PeakWorkingSetSize),
+        if hardware { "GPU" } else { "CPU (tanpa GPU)" },
+        if light { "mode hemat (setengah refresh monitor)" } else { "animasi mengikuti refresh monitor" },
+    );
+    let text: Vec<u16> = report.encode_utf16().chain(Some(0)).collect();
+    MessageBoxW(hwnd, PCWSTR(text.as_ptr()), w!("Penggunaan RAM"), MB_OK | MB_ICONINFORMATION);
 }
 
 fn exe_command() -> Option<Vec<u16>> {
