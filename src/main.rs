@@ -708,17 +708,16 @@ impl App {
         let Some(result) = self.choices_result.lock().unwrap().take() else { return };
         self.searching = false;
         match result {
-            Ok(choices) if choices.is_empty() => {
-                self.choices.clear();
-                self.chosen = None;
-                self.window_note = "Tidak ada hasil. Ubah judul/artis di Lainnya lalu Cari ulang, atau Muat file .lrc.".into();
-            }
             Ok(choices) => {
                 let automatic = choices.iter().position(|c| c.automatic);
-                self.choices = choices;
                 self.chosen = None;
-                self.window_note = format!("{} hasil.", self.choices.len());
-                // Pilihan terakhir: kosongkan bila tidak ada yang cocok, agar lirik yang salah tidak tampil.
+                self.window_note = if choices.is_empty() {
+                    "Tidak ada hasil. Ubah judul/artis di Lainnya lalu Cari ulang, atau Muat file .lrc.".into()
+                } else {
+                    format!("{} hasil.", choices.len())
+                };
+                self.choices = choices;
+                // Pilihan terakhir (juga saat 0 hasil): kosongkan, agar lirik salah yang tersimpan bisa dibuang.
                 self.choices.push(lyrics::Choice {
                     label: "Tanpa lirik · kosongkan untuk lagu ini".into(),
                     lyrics: lyrics::Lyrics { source: "Dikosongkan".into(), ..Default::default() },
@@ -726,7 +725,8 @@ impl App {
                 });
                 match automatic {
                     Some(index) => self.choose(index),
-                    None => self.window_note.push_str(" Belum ada yang pasti cocok — pilih dari daftar."),
+                    None if self.choices.len() > 1 => self.window_note.push_str(" Belum ada yang pasti cocok — pilih dari daftar."),
+                    None => {}
                 }
             }
             Err(message) => self.window_note = message,

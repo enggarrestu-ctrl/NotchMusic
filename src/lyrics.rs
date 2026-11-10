@@ -374,7 +374,8 @@ pub fn search_choices(title: &str, artist: &str, album: &str, duration: f64, ide
             None => (title.clone(), artist.clone(), album.to_string(), duration),
         };
         match sources::better_lyrics(&canonical.0, &canonical.1, &canonical.2, canonical.3) {
-            Ok((record, confident)) => better = Some((record, confident || records.is_empty())),
+            // Tanpa skor yakin tidak dipakai otomatis, walau LRCLIB kosong: bisa lagu lain.
+            Ok((record, confident)) => better = Some((record, confident)),
             Err(e) => note = note.or(Some(e)),
         }
         if !better.as_ref().is_some_and(|b| b.1) {
@@ -1256,6 +1257,31 @@ fn cache_write(identity: &str, lyrics: &Lyrics) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record(track: &str, artist: &str, duration: f64) -> Record {
+        Record { track: track.into(), artist: artist.into(), duration, synced: Some("[00:01.00]a".into()), ..Default::default() }
+    }
+
+    #[test]
+    fn auto_choice_only_when_sure_and_clearly_ahead() {
+        // Cocok judul, artis, durasi: dipakai otomatis.
+        let ranked = rank(vec![record("Shape of You", "Ed Sheeran", 233.0)], "Shape of You", "Ed Sheeran", 233.0);
+        assert!(auto_choice(&ranked).is_some());
+        // Durasi beda jauh: tidak yakin.
+        let ranked = rank(vec![record("Shape of You", "Ed Sheeran", 300.0)], "Shape of You", "Ed Sheeran", 233.0);
+        assert!(auto_choice(&ranked).is_none());
+        // Artis lain: tidak yakin.
+        let ranked = rank(vec![record("Shape of You", "Someone Else", 233.0)], "Shape of You", "Ed Sheeran", 233.0);
+        assert!(auto_choice(&ranked).is_none());
+        // Dua rekaman berbeda dengan skor hampir sama: ragu, jadi tidak otomatis.
+        let ranked = rank(
+            vec![record("Shape of You", "Ed Sheeran", 233.0), record("Shape of You", "Ed Sheeran", 240.0)],
+            "Shape of You",
+            "Ed Sheeran",
+            0.0,
+        );
+        assert!(auto_choice(&ranked).is_none());
+    }
 
     #[test]
     fn lrc_parses_times_and_offset() {
