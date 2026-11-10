@@ -393,6 +393,11 @@ pub(super) fn better_lyrics(title: &str, artist: &str, album: &str, duration: f6
         status => return Err(format!("Better Lyrics belum dapat diakses (HTTP {status}); sumber lain dicoba.")),
     }
     let json: Value = serde_json::from_slice(&response.body).map_err(|_| "Respons Better Lyrics belum bisa digunakan.".to_string())?;
+    better_from_json(&json, title, artist, album, duration)
+}
+
+/// Respons Better Lyrics -> rekaman romaji, dan apakah cukup yakin untuk dipilih otomatis.
+fn better_from_json(json: &Value, title: &str, artist: &str, album: String, duration: f64) -> Result<(Record, bool), String> {
     let ttml = json.get("ttml").and_then(Value::as_str).ok_or("Better Lyrics belum mengirim lirik berwaktu; sumber lain dicoba.")?;
     let lines = ttml_lines(ttml, duration, true);
     if lines.is_empty() {
@@ -613,6 +618,18 @@ mod tests {
         let without = TTML.replace(r#"<text for="L2">sora</text>"#, "");
         assert!(ttml_lines(&without, 0.0, true).is_empty()); // Baris Jepang tanpa romaji.
         assert!(ttml_lines(&format!("<!DOCTYPE x>{TTML}"), 0.0, false).is_empty());
+    }
+
+    #[test]
+    fn better_lyrics_automatic_only_with_high_score() {
+        let sure = |score: Value| {
+            let json = serde_json::json!({ "ttml": TTML, "score": score });
+            better_from_json(&json, "Kimi", "Artis", String::new(), 0.0).unwrap().1
+        };
+        assert!(sure(Value::from(0.95)));
+        assert!(!sure(Value::from(0.5))); // Skor rendah: bisa lagu lain, pilih manual.
+        assert!(!sure(Value::Null)); // Tanpa skor (hasil cache): pilih manual.
+        assert!(!sure(Value::from(1.5))); // Skor di luar 0..1 tidak dipercaya.
     }
 
     #[test]
