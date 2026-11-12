@@ -1,6 +1,6 @@
 [package]
 name = "notchrust"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Widget notch NotchMusic, ditulis ulang dengan Rust (Win32 + Direct2D)"
 license = "MIT"

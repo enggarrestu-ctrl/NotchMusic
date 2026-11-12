@@ -1268,8 +1268,10 @@ impl Gfx {
         let scale = ((cr - 10.0 - left) / (name_w + gap + time_w)).min(1.0);
         let row = Matrix3x2 { M11: scale, M12: 0.0, M21: 0.0, M22: scale, M31: left * (1.0 - scale), M32: (ct + 42.0) * (1.0 - scale) };
         rt.SetTransform(&multiply(&row, &base));
-        self.text(p.next_time.name, &self.formats.card_name, rect(left, ct + 28.0, left + name_w + 2.0, ct + 56.0), &ink);
-        self.text(&time, &self.formats.card_time, rect(left + name_w + gap, ct + 26.0, left + name_w + gap + time_w + 2.0, ct + 56.0), &ink);
+        // Kotak teks diberi ruang lebih (rata kiri, tengah vertikal tetap): skala layar/versi font lain
+        // bisa menggambar sedikit lebih besar dari hasil ukur, dan kotak pas akan memotong tepinya.
+        self.text(p.next_time.name, &self.formats.card_name, rect(left, ct + 22.0, left + name_w + 10.0, ct + 62.0), &ink);
+        self.text(&time, &self.formats.card_time, rect(left + name_w + gap, ct + 20.0, left + name_w + gap + time_w + 10.0, ct + 62.0), &ink);
         rt.SetTransform(&base);
         // Hitung mundur satu baris; bila terlalu panjang ("7 jam 34 menit lagi") diperkecil, tidak dipotong/terlipat.
         let note_w = self.measure(p.countdown, &self.formats.card_note);
