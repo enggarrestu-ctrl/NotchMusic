@@ -93,6 +93,7 @@ const MENU_LIGHT: usize = 14;
 const MENU_RELOAD_MEDIA: usize = 15;
 const MENU_MEMORY: usize = 16;
 const MENU_SOURCE_AUTO: usize = 17;
+const MENU_LINE: usize = 18;
 /// Sesi media ke-i: MENU_SOURCE + i.
 const MENU_SOURCE: usize = 100;
 
@@ -143,6 +144,8 @@ struct App {
     seek_hold: Option<(f32, Instant, i64)>,
     /// Lagu saat pencarian jendela lirik dimulai: hasil untuk lagu lain tidak dipakai/disimpan.
     search_key: String,
+    /// Mode Garis: notch kecil hanya garis; buka dengan klik kiri, tidak bisa diseret/klik kanan saat tertutup.
+    line_mode: bool,
     game_drag: Option<(usize, Option<(usize, bool)>)>,
     /// Fitur yang bisa dimatikan dari menu klik kanan.
     clipboard_enabled: bool,
@@ -307,6 +310,7 @@ fn main() -> Result<()> {
             seek_drag: None,
             seek_hold: None,
             search_key: String::new(),
+            line_mode: read_setting("LineMode") == Some(1),
             game_drag: None,
             clipboard_enabled: read_setting("ClipboardEnabled") != Some(0),
             prayer_enabled: read_setting("PrayerEnabled") != Some(0),
@@ -454,6 +458,7 @@ impl App {
         let compact_line = lines.compact.as_deref();
         let notice = self.notice.as_ref().map(|(text, _)| text.clone());
         self.compact_target = match (&notice, compact_line) {
+            _ if self.line_mode => (draw::LINE_W, draw::LINE_H), // Lirik/pengingat tidak ditampilkan.
             (Some(text), _) => ((self.gfx.compact_lyric_width(text) + 32.0 * 2.0 + 6.0).clamp(COMPACT_W, EXPANDED_W), draw::MUSIC_H),
             (None, Some(line)) => (
                 (self.gfx.compact_lyric_width(line) + draw::COMPACT_CHROME).clamp(COMPACT_W, EXPANDED_W),
@@ -464,7 +469,8 @@ impl App {
         if self.compact != self.compact_target {
             self.start_animation_timer();
         }
-        self.update_equalizer(compact_line.is_some());
+        // Timer yang sama menggerakkan kedipan garis saat ada notifikasi di Mode Garis.
+        self.update_equalizer(if self.line_mode { notice.is_some() } else { compact_line.is_some() });
 
         let rows: Vec<ClipRow> = self
             .history
@@ -546,6 +552,10 @@ impl App {
             docked: self.docked,
             speed: self.speed_enabled,
             seek,
+            line: self.line_mode.then(|| match notice {
+                Some(_) => 0.25 + 0.75 * (elapsed_secs * std::f32::consts::PI * 1.25).sin().abs(),
+                None => 1.0,
+            }),
         };
         let _ = self.gfx.present(self.hwnd, self.origin, &view, self.dpi);
     }
@@ -1171,8 +1181,8 @@ impl App {
             self.game_press = Some((i, cursor));
             return;
         }
-        if self.hit(x, y) != Hit::None {
-            return;
+        if self.hit(x, y) != Hit::None || self.line_mode {
+            return; // Mode Garis: notch tidak bisa diseret.
         }
         let mut cursor = POINT::default();
         unsafe {
@@ -1422,7 +1432,8 @@ impl App {
         if self.game_locked() {
             return; // Terkunci saat game layar penuh: tidak terbuka, tidak ada efek hover.
         }
-        if draw::inside_shape(self.t, self.compact, x, y) {
+        // Mode Garis: hover tidak membuka; klik garis yang membuka (on_click).
+        if draw::inside_shape(self.t, self.compact, x, y) && !(self.line_mode && self.target < 0.5) {
             self.animate_to(1.0);
         }
         let hover = self.hit(x, y);
@@ -1447,6 +1458,10 @@ impl App {
     }
 
     fn on_click(&mut self, lparam: LPARAM) {
+        if self.line_mode && self.target < 0.5 {
+            self.animate_to(1.0); // Mode Garis: klik kiri garis untuk membuka.
+            return;
+        }
         let (x, y) = self.to_dip(lparam);
         let hit = self.hit(x, y);
         if self.city_picker.is_some() && !matches!(hit, Hit::CityItem(_) | Hit::PrayerCity) {
@@ -1723,7 +1738,8 @@ extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam:
                 LRESULT(0)
             }
             WM_RBUTTONUP => {
-                match with_app(|app| (app.game_locked(), { let (x, y) = app.to_dip(lparam); app.hit(x, y) })) {
+                // Mode Garis tertutup: klik kanan tidak berbuat apa-apa (menu tetap ada di ikon tray).
+                match with_app(|app| (app.game_locked() || (app.line_mode && app.target < 0.5), { let (x, y) = app.to_dip(lparam); app.hit(x, y) })) {
                     Some((true, _)) | None => {}
                     Some((false, Hit::GameTile(i))) => show_game_menu(hwnd, i),
                     Some((false, Hit::Theme)) => open_theme_editor(hwnd),
@@ -1910,8 +1926,8 @@ unsafe fn pick_game_file(hwnd: HWND) -> Option<String> {
 /// menjalankan message loop sendiri.
 unsafe fn show_menu(hwnd: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
-    let (hidden, offline, pinned, light) =
-        with_app(|app| (app.hidden, app.offline, app.pinned, app.gfx.light)).unwrap_or((false, false, true, false));
+    let (hidden, offline, pinned, light, line) =
+        with_app(|app| (app.hidden, app.offline, app.pinned, app.gfx.light, app.line_mode)).unwrap_or((false, false, true, false, false));
     let (sessions, manual) = with_app(|app| {
         let media = app.media.lock().unwrap();
         (media.sessions.clone(), media.manual.clone())
@@ -1938,6 +1954,7 @@ unsafe fn show_menu(hwnd: HWND) {
     item(MF_STRING, MENU_RESET_POSITION, "Reset posisi ke atas tengah layar");
     item(MF_STRING, MENU_SHOW, show_label);
     item(MF_STRING | checked(light), MENU_LIGHT, "Mode hemat animasi (30 fps)");
+    item(MF_STRING | checked(line), MENU_LINE, "Mode Garis: sembunyikan notch, klik garis untuk membuka");
     menu::separator(menu);
     item(MF_STRING | MF_GRAYED, 0, "Fitur aktif");
     item(MF_STRING | checked(clipboard_on), MENU_CLIPBOARD, "Halaman Clipboard");
@@ -2016,6 +2033,13 @@ unsafe fn show_menu(hwnd: HWND) {
         }
         MENU_PIN => {
             with_app(|app| app.toggle_pin());
+        }
+        MENU_LINE => {
+            with_app(|app| {
+                app.line_mode = !app.line_mode;
+                write_setting("LineMode", app.line_mode as u32);
+                app.render();
+            });
         }
         MENU_LIGHT => {
             with_app(|app| {

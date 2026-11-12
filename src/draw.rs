@@ -76,6 +76,7 @@ const TEXT: u32 = 0xFFFFFF;
 const LYRIC_BOX: (u32, f32) = (0x8E9162, 0x26 as f32 / 255.0);
 
 /// Background, Surface, Soft, Accent, Ink, garis progres: sama dengan tema bawaan NotchMusic.
+/// `line`: warna garis Mode Garis (bawaan = warna garis progres).
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub name: &'static str,
@@ -85,16 +86,17 @@ pub struct Theme {
     pub accent: u32,
     pub ink: u32,
     pub progress: u32,
+    pub line: u32,
 }
 
 pub const THEMES: [Theme; 6] = [
-    Theme { name: "Zaitun", background: 0x6A795D, surface: 0x8E9162, soft: 0xB2BD7E, accent: 0xD9D28B, ink: 0x182116, progress: 0xD9D28B },
-    Theme { name: "Malam", background: 0x1E2A44, surface: 0x34466B, soft: 0x7FA3D9, accent: 0xBFD7FF, ink: 0x0B1222, progress: 0xBFD7FF },
-    Theme { name: "Grafit", background: 0x1C1C1E, surface: 0x3A3A3C, soft: 0xA1A1A6, accent: 0xE5E5EA, ink: 0x111113, progress: 0xE5E5EA },
-    Theme { name: "Anggur", background: 0x4A2433, surface: 0x6E3A4D, soft: 0xC98AA0, accent: 0xF2C4CE, ink: 0x22101A, progress: 0xF2C4CE },
-    Theme { name: "Biru Es", background: 0x112D4E, surface: 0x3F72AF, soft: 0xDBE2EF, accent: 0xF9F7F7, ink: 0x112D4E, progress: 0xF9F7F7 },
+    Theme { name: "Zaitun", background: 0x6A795D, surface: 0x8E9162, soft: 0xB2BD7E, accent: 0xD9D28B, ink: 0x182116, progress: 0xD9D28B, line: 0xD9D28B },
+    Theme { name: "Malam", background: 0x1E2A44, surface: 0x34466B, soft: 0x7FA3D9, accent: 0xBFD7FF, ink: 0x0B1222, progress: 0xBFD7FF, line: 0xBFD7FF },
+    Theme { name: "Grafit", background: 0x1C1C1E, surface: 0x3A3A3C, soft: 0xA1A1A6, accent: 0xE5E5EA, ink: 0x111113, progress: 0xE5E5EA, line: 0xE5E5EA },
+    Theme { name: "Anggur", background: 0x4A2433, surface: 0x6E3A4D, soft: 0xC98AA0, accent: 0xF2C4CE, ink: 0x22101A, progress: 0xF2C4CE, line: 0xF2C4CE },
+    Theme { name: "Biru Es", background: 0x112D4E, surface: 0x3F72AF, soft: 0xDBE2EF, accent: 0xF9F7F7, ink: 0x112D4E, progress: 0xF9F7F7, line: 0xF9F7F7 },
     // Hitam legam: latar #000 menyatu dengan bezel layar; aksen mint senada logo.
-    Theme { name: "Hitam Legam", background: 0x000000, surface: 0x2C2C2E, soft: 0xF2F2F7, accent: 0x7DE2B4, ink: 0x000000, progress: 0x7DE2B4 },
+    Theme { name: "Hitam Legam", background: 0x000000, surface: 0x2C2C2E, soft: 0xF2F2F7, accent: 0x7DE2B4, ink: 0x000000, progress: 0x7DE2B4, line: 0x7DE2B4 },
 ];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -231,6 +233,8 @@ pub struct View<'a> {
     pub docked: bool,
     /// Posisi slider saat diseret/baru dilepas (pecahan 0..1), menggantikan posisi dari pemutar.
     pub seek: Option<f32>,
+    /// Mode Garis: notch kecil hanya garis tipis; nilai = kecerahan garis (berkedip saat ada notifikasi).
+    pub line: Option<f32>,
 }
 
 /// Ukuran sudut bentuk notch (sama dengan NotchSurface.UpdateOutline): flare atas saat menempel,
@@ -249,6 +253,11 @@ fn corners(w: f32, h: f32, docked: bool) -> (f32, f32, f32) {
 pub const BOUNCE_ROOM: f32 = 12.0;
 /// Isi panel terbuka turun 12 DIP saat mengambang (tanpa layar di atasnya): jarak atas = jarak bawah.
 pub const FLOAT_DY: f32 = 12.0;
+
+/// Mode Garis: garis 120 x 3 DIP di tengah atas; area klik 8 DIP agar mudah dikenai kursor.
+pub const LINE_W: f32 = 120.0;
+pub const LINE_H: f32 = 8.0;
+const LINE_THICK: f32 = 3.0;
 
 pub fn content_dy(docked: bool) -> f32 {
     if docked { 0.0 } else { FLOAT_DY }
@@ -773,7 +782,9 @@ impl Gfx {
         let theme = v.theme;
         let (x0, w, h) = view_bounds(v);
         let shape = self.notch_shape(x0, w, h, v.docked)?;
-        rt.FillGeometry(&shape, &self.brush(theme.background, 1.0)?, None::<&ID2D1Brush>);
+        // Mode Garis: badan notch baru tampak saat membuka (garis memudar, notch muncul).
+        let reveal = if v.line.is_some() { (v.t * 3.0).min(1.0) } else { 1.0 };
+        rt.FillGeometry(&shape, &self.brush(theme.background, reveal)?, None::<&ID2D1Brush>);
 
         // Garis tepi dan garis progres dipotong oleh bentuk notch, seperti clip di NotchSurface.
         let layer = rt.CreateLayer(None)?;
@@ -788,7 +799,7 @@ impl Gfx {
         };
         rt.PushLayer(&params, &layer);
         drop(ManuallyDrop::into_inner(params.geometricMask));
-        rt.DrawGeometry(&shape, &self.brush(theme.surface, 1.0)?, 1.2, None::<&ID2D1StrokeStyle>);
+        rt.DrawGeometry(&shape, &self.brush(theme.surface, reveal)?, 1.2, None::<&ID2D1StrokeStyle>);
 
         let media = v.media;
         let duration = media.duration_secs();
@@ -798,12 +809,16 @@ impl Gfx {
         };
         let fraction = if duration > 0.0 { (elapsed / duration) as f32 } else { 0.0 };
         let compact_alpha = 1.0 - (v.t * 2.5).min(1.0);
-        if compact_alpha > 0.0 && media.active && duration > 0.0 {
+        if compact_alpha > 0.0 && media.active && duration > 0.0 && v.line.is_none() {
             self.paint_edge_progress(x0, w, h, v.docked, fraction, &self.brush(theme.progress, compact_alpha)?)?;
         }
         rt.PopLayer();
 
-        if compact_alpha > 0.0 {
+        if let Some(brightness) = v.line {
+            if reveal < 1.0 {
+                self.paint_line(v, (1.0 - reveal) * brightness)?;
+            }
+        } else if compact_alpha > 0.0 {
             match (v.notice, v.lyric.compact) {
                 (Some(notice), _) => {
                     let cy = h / 2.0 - 1.0;
@@ -943,6 +958,16 @@ impl Gfx {
         let speed_left = clock_left + clock_width + 8.0;
         self.text(&format!("↓ {}", v.down), &self.formats.speed, rect(speed_left, cy - 12.0, speed_left + 60.0, cy), &white);
         self.text(&format!("↑ {}", v.up), &self.formats.speed, rect(speed_left, cy, speed_left + 60.0, cy + 12.0), &white);
+        Ok(())
+    }
+
+    /// Mode Garis: hanya garis tipis warna `theme.line` di tengah atas (menempel di tepi layar bila docked).
+    unsafe fn paint_line(&self, v: &View, alpha: f32) -> Result<()> {
+        let top = if v.docked { 0.0 } else { (LINE_H - LINE_THICK) / 2.0 };
+        let left = CENTER_X - LINE_W / 2.0;
+        let radius = LINE_THICK / 2.0;
+        let bar = D2D1_ROUNDED_RECT { rect: rect(left, top, left + LINE_W, top + LINE_THICK), radiusX: radius, radiusY: radius };
+        self.target.FillRoundedRectangle(&bar, &self.brush(v.theme.line, alpha)?);
         Ok(())
     }
 

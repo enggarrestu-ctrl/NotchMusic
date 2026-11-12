@@ -1,4 +1,4 @@
-// Editor tema kustom, port ThemeEditor NotchMusic: enam kotak warna (klik = dialog warna Windows,
+// Editor tema kustom, port ThemeEditor NotchMusic: tujuh kotak warna (ke-7: garis Mode Garis) (klik = dialog warna Windows,
 // sama dengan "Edit colors" di Paint) dan kode hex. Perubahan langsung dipratinjau di notch;
 // Batal/tutup mengembalikan tema sebelumnya, Simpan menjadikannya tema "Kustom" (urutan terakhir).
 // Jendelanya sendiri memakai warna yang sedang diedit: latar, kolom hex, tombol, dan bilah judul.
@@ -21,26 +21,33 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::draw::Theme;
 
-const LABELS: [&str; 6] =
-    ["Latar notch", "Cover dan garis tepi", "Tombol", "Aksen (hover, progres, lirik)", "Ikon di tombol", "Garis progres notch"];
+const LABELS: [&str; 7] = [
+    "Latar notch",
+    "Cover dan garis tepi",
+    "Tombol",
+    "Aksen (hover, progres, lirik)",
+    "Ikon di tombol",
+    "Garis progres notch",
+    "Garis Mode Garis",
+];
 const SWATCH_ID: usize = 100;
 const EDIT_ID: usize = 200;
 const SETTINGS_KEY: PCWSTR = w!("Software\\NotchRust");
 
 pub enum Action {
     /// Warna diubah: tampilkan di notch tanpa menyimpan.
-    Preview([u32; 6]),
-    Save([u32; 6]),
+    Preview([u32; 7]),
+    Save([u32; 7]),
     /// Ditutup tanpa Simpan: kembali ke tema sebelumnya.
     Cancel,
 }
 
 struct State {
     hwnd: HWND,
-    colors: [u32; 6],
-    swatches: [HWND; 6],
-    edits: [HWND; 6],
-    brushes: [HBRUSH; 6],
+    colors: [u32; 7],
+    swatches: [HWND; 7],
+    edits: [HWND; 7],
+    brushes: [HBRUSH; 7],
     /// Latar jendela (warna latar notch) dan kolom hex (warna cover/garis tepi).
     back: HBRUSH,
     field: HBRUSH,
@@ -55,12 +62,12 @@ thread_local! {
     static CUSTOM: Cell<[COLORREF; 16]> = const { Cell::new([COLORREF(0xFFFFFF); 16]) };
 }
 
-pub fn to_theme(c: [u32; 6]) -> Theme {
-    Theme { name: "Kustom", background: c[0], surface: c[1], soft: c[2], accent: c[3], ink: c[4], progress: c[5] }
+pub fn to_theme(c: [u32; 7]) -> Theme {
+    Theme { name: "Kustom", background: c[0], surface: c[1], soft: c[2], accent: c[3], ink: c[4], progress: c[5], line: c[6] }
 }
 
-pub fn colors(t: &Theme) -> [u32; 6] {
-    [t.background, t.surface, t.soft, t.accent, t.ink, t.progress]
+pub fn colors(t: &Theme) -> [u32; 7] {
+    [t.background, t.surface, t.soft, t.accent, t.ink, t.progress, t.line]
 }
 
 /// "#RRGGBB" atau "RRGGBB" (huruf besar/kecil); selain itu None.
@@ -74,18 +81,20 @@ fn hex(rgb: u32) -> String {
     format!("#{rgb:06X}")
 }
 
-/// 5 atau 6 warna (format CustomColors NotchMusic); warna ke-6 (garis progres) bawaannya = aksen.
-fn parse_list<'a>(items: impl IntoIterator<Item = &'a str>) -> Option<[u32; 6]> {
+/// 5, 6, atau 7 warna (5/6 = format CustomColors NotchMusic). Bawaan: garis progres = aksen,
+/// garis Mode Garis = garis progres.
+fn parse_list<'a>(items: impl IntoIterator<Item = &'a str>) -> Option<[u32; 7]> {
     let list: Vec<u32> = items.into_iter().map(parse_hex).collect::<Option<_>>()?;
     match list.len() {
-        5 => Some([list[0], list[1], list[2], list[3], list[4], list[3]]),
-        6 => list.try_into().ok(),
+        5 => Some([list[0], list[1], list[2], list[3], list[4], list[3], list[3]]),
+        6 => Some([list[0], list[1], list[2], list[3], list[4], list[5], list[5]]),
+        7 => list.try_into().ok(),
         _ => None,
     }
 }
 
 /// Tema kustom tersimpan; pertama kali jalan memakai tema kustom NotchMusic bila ada.
-pub fn load() -> Option<[u32; 6]> {
+pub fn load() -> Option<[u32; 7]> {
     let mut buffer = [0u16; 256];
     let mut size = (buffer.len() * 2) as u32;
     let stored = unsafe {
@@ -101,7 +110,7 @@ pub fn load() -> Option<[u32; 6]> {
     parse_list(json["CustomColors"].as_array()?.iter().filter_map(|v| v.as_str()))
 }
 
-pub fn save(colors: [u32; 6]) {
+pub fn save(colors: [u32; 7]) {
     let text: Vec<u16> = colors.map(hex).join(",").encode_utf16().chain(Some(0)).collect();
     unsafe {
         let _ = RegSetKeyValueW(HKEY_CURRENT_USER, SETTINGS_KEY, w!("CustomTheme"), REG_SZ.0, Some(text.as_ptr() as _), (text.len() * 2) as u32);
@@ -165,7 +174,7 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 /// Buka editor (atau aktifkan bila sudah terbuka) dengan warna tema yang sedang dipakai.
-pub unsafe fn open(instance: HINSTANCE, owner: HWND, colors: [u32; 6], topmost: bool, handler: fn(Action)) {
+pub unsafe fn open(instance: HINSTANCE, owner: HWND, colors: [u32; 7], topmost: bool, handler: fn(Action)) {
     if let Some(hwnd) = STATE.with(|s| s.borrow().as_ref().map(|s| s.hwnd)) {
         let _ = SetForegroundWindow(hwnd);
         return;
@@ -212,16 +221,16 @@ pub unsafe fn open(instance: HINSTANCE, owner: HWND, colors: [u32; 6], topmost: 
         child
     };
     control(w!("STATIC"), "Klik kotak warna untuk memilih, atau ketik kode hex.", WINDOW_STYLE(0), WINDOW_EX_STYLE(0), 16, 16, 340, 20, 0);
-    let mut swatches = [HWND::default(); 6];
-    let mut edits = [HWND::default(); 6];
-    for i in 0..6 {
+    let mut swatches = [HWND::default(); 7];
+    let mut edits = [HWND::default(); 7];
+    for i in 0..7 {
         let y = 48 + i as i32 * 32;
         swatches[i] = control(w!("STATIC"), "", WINDOW_STYLE(0x100) /* SS_NOTIFY */ | WS_BORDER, WINDOW_EX_STYLE(0), 16, y, 36, 24, SWATCH_ID + i);
         control(w!("STATIC"), LABELS[i], WINDOW_STYLE(0x200) /* SS_CENTERIMAGE */, WINDOW_EX_STYLE(0), 62, y, 200, 24, 0);
         edits[i] = control(w!("EDIT"), &hex(colors[i]), WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), WS_EX_CLIENTEDGE, 270, y, 84, 24, EDIT_ID + i);
         SendMessageW(edits[i], 0xC5 /* EM_LIMITTEXT */, WPARAM(7), LPARAM(0));
     }
-    let buttons_y = 48 + 6 * 32 + 8;
+    let buttons_y = 48 + 7 * 32 + 8;
     // Digambar sendiri (WM_DRAWITEM) agar ikut warna tema; Enter tetap = Simpan lewat IsDialogMessage (IDOK).
     let owner_draw = WS_TABSTOP | WINDOW_STYLE(BS_OWNERDRAW as u32);
     control(w!("BUTTON"), "Simpan", owner_draw, WINDOW_EX_STYLE(0), 186, buttons_y, 80, 28, IDOK.0 as usize);
@@ -378,7 +387,9 @@ mod tests {
         assert_eq!(parse_hex("#GGGGGG"), None);
         assert_eq!(hex(0x0A0B0C), "#0A0B0C");
         let five = parse_list(["#000000", "#111111", "#222222", "#333333", "#444444"]).unwrap();
-        assert_eq!(five[5], 0x333333);
+        assert_eq!((five[5], five[6]), (0x333333, 0x333333));
+        let six = parse_list(["#000000", "#111111", "#222222", "#333333", "#444444", "#555555"]).unwrap();
+        assert_eq!(six[6], 0x555555); // Tema kustom lama: garis Mode Garis = garis progres.
         assert!(parse_list(["#000000"]).is_none());
         assert_eq!(colors(&to_theme(five)), five);
     }
